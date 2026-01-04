@@ -8,6 +8,7 @@ pydantic-settings==2.1.0
 sqlalchemy==2.0.25
 asyncpg==0.29.0  # Async PostgreSQL driver
 psycopg2-binary==2.9.9  # Sync PostgreSQL (for migrations)
+pgvector==0.2.4  # PostgreSQL vector extension support
 
 # AWS
 boto3==1.34.34
@@ -23,6 +24,7 @@ groq==0.4.1  # Groq API client
 
 # XML Parsing
 lxml==5.1.0
+defusedxml==0.7.1  # Secure XML parsing
 
 # Utilities
 python-dotenv==1.0.0
