@@ -4,21 +4,34 @@ Database connection and session management
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker
-from backend.core.config import settings
-from backend.models.database import Base
+from models.database import Base
 import logging
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from root directory
+root_dir = Path(__file__).parent.parent.parent
+env_path = root_dir / '.env'
+load_dotenv(dotenv_path=env_path)
 
 logger = logging.getLogger(__name__)
 
+# Get database URL from environment
+database_url = os.getenv('DATABASE_URL', 'postgresql://localhost/glp1_labels')
+logger.info(f"Loading .env from: {env_path}")
+logger.info(f"DATABASE_URL loaded: {database_url[:50]}...")  # Log first 50 chars
+
 # Convert postgresql:// to postgresql+asyncpg:// for async engine
-database_url = settings.DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://')
+if database_url.startswith('postgresql://'):
+    database_url = database_url.replace('postgresql://', 'postgresql+asyncpg://')
 
 # Create async engine
 engine = create_async_engine(
     database_url,
-    echo=settings.DEBUG,
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
+    echo=os.getenv('DEBUG', 'False').lower() == 'true',
+    pool_size=int(os.getenv('DATABASE_POOL_SIZE', '10')),
+    max_overflow=int(os.getenv('DATABASE_MAX_OVERFLOW', '20')),
     pool_pre_ping=True,  # Verify connections before using
 )
 

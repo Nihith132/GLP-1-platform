@@ -38,9 +38,8 @@ class DrugLabel(Base):
     status = Column(String(50), default="active", index=True)
     
     # Dates
-    approval_date = Column(DateTime, nullable=True)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    last_updated = Column(DateTime, nullable=True)  # FDA label publication date (from effectiveTime)
+    created_at = Column(DateTime, default=datetime.utcnow)  # When we inserted this record
     
     # NER Summary (JSONB for fast queries)
     ner_summary = Column(JSONB, default={})

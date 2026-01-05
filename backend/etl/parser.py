@@ -140,14 +140,23 @@ class FDAXMLParser:
             if effective_elem is not None:
                 metadata['effective_time'] = effective_elem.get('value', '')
             
-            # Drug Name (from title)
-            title_elem = root.find('.//hl7:title', self.namespaces)
-            if title_elem is not None and title_elem.text:
-                # Clean up the title
-                drug_name = title_elem.text.strip()
-                # Remove common suffixes
-                drug_name = drug_name.replace(' - ', ' ').split(' (')[0]
+            # Drug Name (from manufacturedProduct section - more reliable)
+            drug_name = self._extract_drug_name(root)
+            if drug_name:
                 metadata['name'] = drug_name
+            else:
+                # Fallback: try to extract from title if manufacturedProduct not found
+                title_elem = root.find('.//hl7:title', self.namespaces)
+                if title_elem is not None and title_elem.text:
+                    # Try to extract drug name from title
+                    title_text = title_elem.text.strip()
+                    # Look for patterns like "VICTOZA" or "use VICTOZA"
+                    import re
+                    match = re.search(r'use ([A-Z][A-Z0-9]+)[\s®™]', title_text)
+                    if match:
+                        metadata['name'] = match.group(1)
+                    else:
+                        metadata['name'] = title_text.split()[0] if title_text else "Unknown"
             
             # Generic Name (active ingredient)
             generic_name = self._extract_generic_name(root)
@@ -165,6 +174,25 @@ class FDAXMLParser:
         except Exception as e:
             logger.error(f"Failed to extract metadata: {e}")
             return None
+    
+    def _extract_drug_name(self, root) -> Optional[str]:
+        """Extract drug brand name from manufacturedProduct section"""
+        try:
+            # Primary location: manufacturedProduct/name
+            name_elem = root.find('.//hl7:manufacturedProduct/hl7:manufacturedProduct/hl7:name', self.namespaces)
+            if name_elem is not None and name_elem.text:
+                return name_elem.text.strip()
+            
+            # Alternative: subject section
+            subject_name = root.find('.//hl7:subject/hl7:manufacturedProduct/hl7:manufacturedProduct/hl7:name', 
+                                    self.namespaces)
+            if subject_name is not None and subject_name.text:
+                return subject_name.text.strip()
+                
+        except Exception as e:
+            logger.debug(f"Could not extract drug name from manufacturedProduct: {e}")
+        
+        return None
     
     def _extract_generic_name(self, root) -> Optional[str]:
         """Extract generic/active ingredient name"""

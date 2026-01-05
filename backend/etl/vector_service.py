@@ -140,6 +140,19 @@ class VectorService:
         logger.debug(f"Generated section embedding for: {section_title or 'Unknown section'}")
         return embedding
     
+    def generate_embedding(self, text: str) -> np.ndarray:
+        """
+        Generate embedding for any text (generic method for API queries)
+        Alias for generate_section_embedding without title
+        
+        Args:
+            text: Any text string (query, document, etc.)
+        
+        Returns:
+            384-dimensional numpy array
+        """
+        return self.generate_section_embedding(text, section_title=None)
+    
     def generate_batch_embeddings(self, texts: List[str]) -> np.ndarray:
         """
         Generate embeddings for multiple texts at once (more efficient)

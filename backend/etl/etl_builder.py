@@ -219,6 +219,17 @@ class ETLBuilder:
                 
                 ner_summary = self.ner_service.summarize_entities(all_entities)
                 
+                # Convert effectiveTime to datetime
+                effective_time_str = metadata.get('effective_time', '')
+                last_updated_date = None
+                if effective_time_str:
+                    try:
+                        # Parse FDA date format: YYYYMMDD
+                        from datetime import datetime
+                        last_updated_date = datetime.strptime(effective_time_str, '%Y%m%d')
+                    except ValueError:
+                        logger.warning(f"Could not parse effective_time: {effective_time_str}")
+                
                 # 1. Create DrugLabel record
                 drug_label = DrugLabel(
                     set_id=metadata.get('set_id'),
@@ -228,6 +239,7 @@ class ETLBuilder:
                     manufacturer=metadata.get('manufacturer'),
                     is_current_version=True,
                     status='active',
+                    last_updated=last_updated_date,  # FDA publication date
                     ner_summary=ner_summary,
                     label_embedding=label_embedding.tolist(),  # Convert numpy to list
                     source_file=source_file
@@ -260,7 +272,7 @@ class ETLBuilder:
                 for i, drug_section in enumerate(drug_sections):
                     section_embedding = SectionEmbedding(
                         section_id=drug_section.id,
-                        chunk_index=0,  # We're not chunking yet, whole section
+                        chunk_index=i,  # Sequential index based on section order
                         chunk_text=drug_section.content[:2000],  # Store text used for embedding
                         embedding=section_embeddings[i].tolist(),  # Convert numpy to list
                         drug_name=drug_label.name,
