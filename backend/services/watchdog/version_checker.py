@@ -69,8 +69,8 @@ class VersionChecker:
         Returns dict with status: 'new_version', 'up_to_date', or 'error'
         """
         try:
-            # Get SPL metadata from DailyMed
-            url = f"{self.DAILYMED_API_BASE}/spls/{set_id}.json"
+            # Get version history from DailyMed
+            url = f"{self.DAILYMED_API_BASE}/spls/{set_id}/history.json"
             response = await self.client.get(url)
             
             if response.status_code != 200:
@@ -82,12 +82,25 @@ class VersionChecker:
                 }
             
             data = response.json()
-            metadata = data.get('data', {}).get('spl', {})
             
-            # Extract version and publish date
-            new_version = metadata.get('version_number')
-            publish_date = metadata.get('published_date')
-            drug_name = metadata.get('title', 'Unknown')
+            # Extract latest version from history array
+            history = data.get('data', {}).get('history', [])
+            if not history or len(history) == 0:
+                return {
+                    'status': 'error',
+                    'drug_id': drug_id,
+                    'set_id': set_id,
+                    'error': 'No version history in DailyMed response'
+                }
+            
+            # Get the latest version (first item in history array)
+            latest = history[0]
+            new_version = str(latest.get('spl_version', ''))
+            publish_date = latest.get('published_date', '')
+            
+            # Get drug name from SPL metadata
+            spl_data = data.get('data', {}).get('spl', {})
+            drug_name = spl_data.get('title', 'Unknown')
             
             if not new_version:
                 return {
@@ -98,14 +111,15 @@ class VersionChecker:
                     'error': 'No version number in DailyMed response'
                 }
             
-            # Compare versions
-            if current_version != new_version:
+            # Compare versions (convert both to strings for comparison)
+            current_version_str = str(current_version) if current_version else None
+            if current_version_str != new_version:
                 return {
                     'status': 'new_version',
                     'drug_id': drug_id,
                     'set_id': set_id,
                     'drug_name': drug_name,
-                    'current_version': current_version,
+                    'current_version': current_version_str,
                     'new_version': new_version,
                     'publish_date': publish_date
                 }
@@ -115,7 +129,7 @@ class VersionChecker:
                     'drug_id': drug_id,
                     'set_id': set_id,
                     'drug_name': drug_name,
-                    'current_version': current_version
+                    'current_version': current_version_str
                 }
         
         except Exception as e:
@@ -137,14 +151,37 @@ class VersionChecker:
         Returns path to downloaded ZIP file in temp directory
         """
         try:
-            # DailyMed ZIP download URL
-            url = f"{self.DAILYMED_API_BASE}/spls/{set_id}/media.zip"
+            # DailyMed media endpoint returns links to all media files
+            url = f"{self.DAILYMED_API_BASE}/spls/{set_id}/media.json"
             
-            print(f"         Downloading from: {url}")
+            print(f"         Fetching media links from: {url}")
             response = await self.client.get(url)
             
             if response.status_code != 200:
                 print(f"         Error: HTTP {response.status_code}")
+                return None
+            
+            # Parse response to find ZIP download link
+            data = response.json()
+            media_items = data.get('data', {}).get('media', [])
+            
+            # Find the ZIP file in media items
+            zip_url = None
+            for item in media_items:
+                url_str = item.get('url', '')
+                if url_str.endswith('.zip'):
+                    zip_url = url_str
+                    break
+            
+            if not zip_url:
+                print(f"         Error: No ZIP file found in media response")
+                return None
+            
+            print(f"         Downloading ZIP from: {zip_url}")
+            zip_response = await self.client.get(zip_url)
+            
+            if zip_response.status_code != 200:
+                print(f"         Error: ZIP download HTTP {zip_response.status_code}")
                 return None
             
             # Save to temp file
@@ -152,7 +189,7 @@ class VersionChecker:
             temp_dir.mkdir(exist_ok=True)
             
             zip_path = temp_dir / f"{set_id}_v{version}.zip"
-            zip_path.write_bytes(response.content)
+            zip_path.write_bytes(zip_response.content)
             
             # Verify it's a valid ZIP
             if not zipfile.is_zipfile(zip_path):
