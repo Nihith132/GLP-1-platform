@@ -151,37 +151,20 @@ class VersionChecker:
         Returns path to downloaded ZIP file in temp directory
         """
         try:
-            # DailyMed media endpoint returns links to all media files
-            url = f"{self.DAILYMED_API_BASE}/spls/{set_id}/media.json"
+            # DailyMed direct ZIP download endpoint
+            url = f"https://dailymed.nlm.nih.gov/dailymed/downloadzipfile.cfm?setId={set_id}"
             
-            print(f"         Fetching media links from: {url}")
-            response = await self.client.get(url)
+            print(f"         Downloading from: {url}")
+            response = await self.client.get(url, follow_redirects=True)
             
             if response.status_code != 200:
                 print(f"         Error: HTTP {response.status_code}")
                 return None
             
-            # Parse response to find ZIP download link
-            data = response.json()
-            media_items = data.get('data', {}).get('media', [])
-            
-            # Find the ZIP file in media items
-            zip_url = None
-            for item in media_items:
-                url_str = item.get('url', '')
-                if url_str.endswith('.zip'):
-                    zip_url = url_str
-                    break
-            
-            if not zip_url:
-                print(f"         Error: No ZIP file found in media response")
-                return None
-            
-            print(f"         Downloading ZIP from: {zip_url}")
-            zip_response = await self.client.get(zip_url)
-            
-            if zip_response.status_code != 200:
-                print(f"         Error: ZIP download HTTP {zip_response.status_code}")
+            # Check if response is actually a ZIP file
+            content_type = response.headers.get('content-type', '').lower()
+            if 'html' in content_type:
+                print(f"         Error: Got HTML instead of ZIP file")
                 return None
             
             # Save to temp file
@@ -189,7 +172,7 @@ class VersionChecker:
             temp_dir.mkdir(exist_ok=True)
             
             zip_path = temp_dir / f"{set_id}_v{version}.zip"
-            zip_path.write_bytes(zip_response.content)
+            zip_path.write_bytes(response.content)
             
             # Verify it's a valid ZIP
             if not zipfile.is_zipfile(zip_path):
@@ -197,6 +180,7 @@ class VersionChecker:
                 zip_path.unlink()
                 return None
             
+            print(f"         ✓ Downloaded successfully: {zip_path}")
             return zip_path
         
         except Exception as e:
