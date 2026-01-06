@@ -1,0 +1,67 @@
+name: Watchdog Manual Trigger
+
+# Allows manual execution with specific SET_ID or mode
+on:
+  workflow_dispatch:
+    inputs:
+      set_id:
+        description: 'SET_ID to check (e.g., 2160dee6-dc44-4639-af3f-fd1ac2a32d15)'
+        required: false
+        type: string
+      mode:
+        description: 'Check mode: daily (all enabled) or manual (specific SET_ID)'
+        required: true
+        type: choice
+        options:
+          - daily
+          - manual
+        default: manual
+      force_download:
+        description: 'Force download even if version unchanged'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  manual-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+      
+      - name: Run Watchdog (Manual Mode)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          NOTIFICATION_EMAILS: ${{ secrets.NOTIFICATION_EMAILS }}
+          SET_ID: ${{ github.event.inputs.set_id }}
+          FORCE_DOWNLOAD: ${{ github.event.inputs.force_download }}
+        run: |
+          cd backend
+          python scripts/run_watchdog.py --mode ${{ github.event.inputs.mode }}
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchdog-manual-logs-${{ github.run_number }}
+          path: backend/logs/watchdog_*.log
+          retention-days: 90
