@@ -58,5 +58,21 @@ export const chatService = {
     });
     return response.data;
   },
+
+  // Compare multiple drugs using RAG
+  compare: async (request: {
+    message: string;
+    drug_ids?: number[];
+    conversation_history?: any[];
+  }): Promise<{ answer: string; citations: Array<{ section_name: string; drug_name: string }> }> => {
+    const response = await api.post('/chat/compare', request);
+    return {
+      answer: response.data.response,
+      citations: response.data.citations.map((c: Citation) => ({
+        section_name: c.section_title,
+        drug_name: c.drug_name
+      }))
+    };
+  },
 };
 

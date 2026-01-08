@@ -8,6 +8,8 @@ from sqlalchemy import text
 from typing import List, Dict, Optional
 import difflib
 import os
+import numpy as np
+import json
 from groq import Groq
 
 from api.schemas import (
@@ -299,15 +301,48 @@ async def compare_semantic(request: SemanticDiffRequest):
                 source_section = source_sections[loinc]
                 competitor_section = competitor_sections[loinc]
                 
-                # Split into sentences
-                source_sentences = [s.strip() for s in source_section.content.split('.') if s.strip()]
-                competitor_sentences = [s.strip() for s in competitor_section.content.split('.') if s.strip()]
+                print(f"\n=== Processing section {loinc} ===")
+                print(f"Source section ID: {source_section.id}, Title: {source_section.title}")
+                print(f"Competitor section ID: {competitor_section.id}, Title: {competitor_section.title}")
+                
+                # Get pre-stored embeddings from database
+                source_embeddings_query = text("""
+                    SELECT chunk_text, embedding
+                    FROM section_embeddings
+                    WHERE section_id = :section_id
+                    ORDER BY chunk_index
+                """)
+                competitor_embeddings_query = text("""
+                    SELECT chunk_text, embedding
+                    FROM section_embeddings
+                    WHERE section_id = :section_id
+                    ORDER BY chunk_index
+                """)
+                
+                source_emb_result = await session.execute(source_embeddings_query, {"section_id": source_section.id})
+                competitor_emb_result = await session.execute(competitor_embeddings_query, {"section_id": competitor_section.id})
+                
+                source_rows = source_emb_result.fetchall()
+                competitor_rows = competitor_emb_result.fetchall()
+                
+                print(f"Query returned: {len(source_rows)} source embeddings, {len(competitor_rows)} competitor embeddings")
+                
+                # ONLY use pre-stored embeddings - skip sections without them
+                if not source_rows or not competitor_rows:
+                    print(f"⊗ SKIPPING section {loinc} - embeddings not found in database")
+                    print(f"  Source section ID {source_section.id}: {len(source_rows)} embeddings")
+                    print(f"  Competitor section ID {competitor_section.id}: {len(competitor_rows)} embeddings")
+                    continue
+                
+                # Extract sentences and embeddings from database
+                # pgvector returns embeddings as strings, need to parse them
+                source_sentences = [row[0] for row in source_rows]
+                source_embeddings = [np.array(json.loads(str(row[1]))) for row in source_rows]
+                competitor_sentences = [row[0] for row in competitor_rows]
+                competitor_embeddings = [np.array(json.loads(str(row[1]))) for row in competitor_rows]
+                print(f"✓ Using pre-stored embeddings for section {loinc} ({len(source_rows)} source, {len(competitor_rows)} competitor)")
                 
                 matches = []
-                
-                # Generate embeddings for all sentences
-                source_embeddings = [vector_service.generate_embedding(s) for s in source_sentences]
-                competitor_embeddings = [vector_service.generate_embedding(s) for s in competitor_sentences]
                 
                 # Track matched sentences
                 matched_source = set()
@@ -425,6 +460,9 @@ async def compare_semantic(request: SemanticDiffRequest):
         except HTTPException:
             raise
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"ERROR in semantic diff: {error_details}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Semantic diff failed: {str(e)}"

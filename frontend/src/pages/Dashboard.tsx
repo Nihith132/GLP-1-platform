@@ -185,8 +185,9 @@ export function Dashboard() {
       return;
     }
 
-    // Navigate to comparison workspace (one competitor at a time)
-    navigate(`/comparison/${source.id}/${competitors[0].id}`);
+    // Navigate to comparison workspace with all selected competitors
+    const competitorIds = competitors.map(c => c.id).join(',');
+    navigate(`/comparison/${source.id}/${competitorIds}`);
   };
 
   if (isLoading) {
