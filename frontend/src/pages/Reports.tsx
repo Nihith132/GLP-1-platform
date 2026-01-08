@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { reportService } from '@/services/reportService';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Loading } from '../components/ui/Loading';
-import { FileText, Calendar, Trash2 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { FileText, Calendar, Trash2, FolderOpen } from 'lucide-react';
 import type { Report } from '@/types';
 
 export function Reports() {
+  const navigate = useNavigate();
   const [reports, setReports] = useState<Report[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -28,7 +29,29 @@ export function Reports() {
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleLoadReport = async (reportId: string | number) => {
+    try {
+      // Fetch full report with all components
+      // Don't convert to Number - backend uses UUID strings
+      const report = await reportService.getReportById(reportId);
+      
+      // Store report data in sessionStorage for restoration
+      sessionStorage.setItem('pendingReportLoad', JSON.stringify(report));
+      
+      // Navigate to AnalysisWorkspace with drug ID from workspace_state
+      const drugId = (report as any).workspace_state?.drugId;
+      if (drugId) {
+        navigate(`/analysis/${drugId}?loadReport=${reportId}`);
+      } else {
+        alert('Unable to load report: Drug ID not found');
+      }
+    } catch (error) {
+      console.error('Failed to load report:', error);
+      alert('Failed to load report. Please try again.');
+    }
+  };
+
+  const handleDelete = async (id: number | string) => {
     if (!confirm('Are you sure you want to delete this report?')) return;
 
     try {
@@ -85,11 +108,14 @@ export function Reports() {
               </CardHeader>
               <CardContent>
                 <div className="flex gap-2">
-                  <Link to={`/reports/${report.id}`} className="flex-1">
-                    <Button variant="outline" className="w-full">
-                      View Report
-                    </Button>
-                  </Link>
+                  <Button 
+                    variant="outline" 
+                    className="flex-1"
+                    onClick={() => handleLoadReport(report.id)}
+                  >
+                    <FolderOpen className="h-4 w-4 mr-2" />
+                    Load Report
+                  </Button>
                   <Button
                     variant="destructive"
                     size="icon"

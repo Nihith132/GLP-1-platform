@@ -86,14 +86,19 @@ export interface SectionDifference {
 
 // Report Types
 export interface Report {
-  id: number;
+  id: number | string; // Can be number (old) or string (UUID from new system)
   title: string;
   report_type: 'comparison' | 'analysis' | 'search';
   created_at: string;
-  updated_at: string;
-  data: any;
+  updated_at?: string;
+  data?: any;
   tags?: string[];
   notes?: string;
+  // New report system fields
+  type_category?: string;
+  last_modified?: string;
+  drug_names?: string[];
+  workspace_state?: WorkspaceState;
 }
 
 // Chat Types
@@ -102,6 +107,12 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  isFlagged?: boolean;
+  citations?: {
+    drug_name: string;
+    section_name: string;
+    relevance_score: number;
+  }[];
 }
 
 export interface ChatResponse {
@@ -136,4 +147,46 @@ export interface VersionHistory {
   publish_date?: string;
   s3_key?: string;
   processed: boolean;
+}
+
+// Workspace & Report Types
+export interface Highlight {
+  id: string;
+  sectionId: number;
+  startOffset: number;
+  endOffset: number;
+  text: string;
+  color: 'red' | 'blue';
+  noteId?: string;
+  createdAt: string;
+  // Position data for reliable rendering
+  rect?: {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface Note {
+  id: string;
+  type: 'cited' | 'uncited';
+  content: string;
+  highlightId?: string;
+  createdAt: string;
+}
+
+export interface WorkspaceState {
+  drugId: number;
+  drugName: string;
+  highlights: Highlight[];
+  notes: Note[];
+  flaggedChats: ChatMessage[];
+  scrollPosition: number;
+}
+
+export interface SavedReport extends Report {
+  drug_label_id: number;
+  workspace_state: WorkspaceState;
+  thumbnail_url?: string;
 }

@@ -30,15 +30,18 @@ async def create_report(request: CreateReportRequest):
     """
     Create a new report
     
-    Saves workspace state, metadata, and returns report ID
+    Saves workspace state, metadata, and decomposes into component tables:
+    - Highlights → report_highlights
+    - Notes → report_quick_notes
+    - Flagged Chats → report_flagged_chats
     """
     async with AsyncSessionLocal() as session:
         try:
             report_id = str(uuid.uuid4())
             now = datetime.utcnow()
             
-            # Insert report
-            insert_query = text("""
+            # 1. Insert main report
+            insert_report_query = text("""
                 INSERT INTO reports (
                     id, report_type, title, type_category, description, tags,
                     created_at, last_modified, workspace_state
@@ -51,7 +54,7 @@ async def create_report(request: CreateReportRequest):
             """)
             
             result = await session.execute(
-                insert_query,
+                insert_report_query,
                 {
                     "id": report_id,
                     "report_type": request.report_type,
@@ -65,13 +68,156 @@ async def create_report(request: CreateReportRequest):
                 }
             )
             
-            await session.commit()
-            
             row = result.fetchone()
-            
-            # Return full report detail (empty components initially)
             workspace_data = row.workspace_state if isinstance(row.workspace_state, dict) else json.loads(row.workspace_state)
             
+            # DEBUG: Log workspace data structure
+            print("\n🔍 DEBUG - Workspace State Structure:")
+            print(f"  - drugId: {workspace_data.get('drugId')}")
+            print(f"  - drugName: {workspace_data.get('drugName')}")
+            print(f"  - highlights count: {len(workspace_data.get('highlights', []))}")
+            print(f"  - notes count: {len(workspace_data.get('notes', []))}")
+            print(f"  - flaggedChats count: {len(workspace_data.get('flaggedChats', []))}")
+            if workspace_data.get('highlights'):
+                print(f"  - First highlight: {workspace_data['highlights'][0]}")
+            print("\n")
+            
+            # 2. Extract and insert highlights
+            highlights = workspace_data.get('highlights', [])
+            drug_id = workspace_data.get('drugId')
+            saved_highlights = []
+            
+            if highlights and drug_id:
+                for highlight in highlights:
+                    highlight_id = str(uuid.uuid4())
+                    insert_highlight_query = text("""
+                        INSERT INTO report_highlights (
+                            id, report_id, drug_id, section_id, loinc_code,
+                            start_char, end_char, color, highlighted_text, created_at
+                        )
+                        VALUES (
+                            :id, :report_id, :drug_id, :section_id, :loinc_code,
+                            :start_char, :end_char, :color, :highlighted_text, :created_at
+                        )
+                        RETURNING *
+                    """)
+                    
+                    h_result = await session.execute(
+                        insert_highlight_query,
+                        {
+                            "id": highlight_id,
+                            "report_id": report_id,
+                            "drug_id": drug_id,
+                            "section_id": highlight.get('sectionId'),
+                            "loinc_code": "UNKNOWN",  # Will need to fetch from section if needed
+                            "start_char": highlight.get('startOffset', 0),
+                            "end_char": highlight.get('endOffset', 0),
+                            "color": highlight.get('color', 'blue'),
+                            "highlighted_text": highlight.get('text', ''),
+                            "created_at": now
+                        }
+                    )
+                    h_row = h_result.fetchone()
+                    if h_row:
+                        saved_highlights.append({
+                            "id": str(h_row.id),
+                            "section_id": h_row.section_id,
+                            "start_char": h_row.start_char,
+                            "end_char": h_row.end_char,
+                            "color": h_row.color,
+                            "text": h_row.highlighted_text
+                        })
+            
+            # 3. Extract and insert notes
+            notes = workspace_data.get('notes', [])
+            saved_notes = []
+            
+            if notes:
+                for note in notes:
+                    note_id = str(uuid.uuid4())
+                    note_type = 'citation_linked' if note.get('type') == 'cited' else 'standalone'
+                    
+                    insert_note_query = text("""
+                        INSERT INTO report_quick_notes (
+                            id, report_id, note_type, content,
+                            drug_id, drug_name, created_at, updated_at
+                        )
+                        VALUES (
+                            :id, :report_id, :note_type, :content,
+                            :drug_id, :drug_name, :created_at, :updated_at
+                        )
+                        RETURNING *
+                    """)
+                    
+                    n_result = await session.execute(
+                        insert_note_query,
+                        {
+                            "id": note_id,
+                            "report_id": report_id,
+                            "note_type": note_type,
+                            "content": note.get('content', ''),
+                            "drug_id": drug_id,
+                            "drug_name": workspace_data.get('drugName', 'Unknown'),
+                            "created_at": now,
+                            "updated_at": now
+                        }
+                    )
+                    n_row = n_result.fetchone()
+                    if n_row:
+                        saved_notes.append({
+                            "id": str(n_row.id),
+                            "type": note.get('type', 'uncited'),
+                            "content": n_row.content,
+                            "created_at": n_row.created_at.isoformat() if n_row.created_at else now.isoformat()
+                        })
+            
+            # 4. Extract and insert flagged chats
+            flagged_chats = workspace_data.get('flaggedChats', [])
+            saved_chats = []
+            
+            if flagged_chats:
+                for chat in flagged_chats:
+                    # Only save assistant messages (which have answers)
+                    if chat.get('role') == 'assistant':
+                        chat_id = str(uuid.uuid4())
+                        
+                        # Find the corresponding user question
+                        # This is a simplification - in production, you'd track conversation pairs
+                        question = "User question"  # Placeholder
+                        
+                        insert_chat_query = text("""
+                            INSERT INTO report_flagged_chats (
+                                id, report_id, question, answer, citations, flagged_at
+                            )
+                            VALUES (
+                                :id, :report_id, :question, :answer, :citations, :flagged_at
+                            )
+                            RETURNING *
+                        """)
+                        
+                        c_result = await session.execute(
+                            insert_chat_query,
+                            {
+                                "id": chat_id,
+                                "report_id": report_id,
+                                "question": question,
+                                "answer": chat.get('content', ''),
+                                "citations": json.dumps(chat.get('citations', [])),
+                                "flagged_at": now
+                            }
+                        )
+                        c_row = c_result.fetchone()
+                        if c_row:
+                            saved_chats.append({
+                                "id": str(c_row.id),
+                                "question": c_row.question,
+                                "answer": c_row.answer,
+                                "citations": json.loads(c_row.citations) if isinstance(c_row.citations, str) else c_row.citations
+                            })
+            
+            await session.commit()
+            
+            # Return full report detail with all components
             return ReportDetail(
                 id=str(row.id),
                 report_type=row.report_type,
@@ -84,10 +230,10 @@ async def create_report(request: CreateReportRequest):
                 workspace_state=workspace_data,
                 created_at=row.created_at,
                 last_modified=row.last_modified,
-                flagged_chats=[],
+                flagged_chats=saved_chats,
                 flagged_summaries=[],
-                highlights=[],
-                quick_notes=[]
+                highlights=saved_highlights,
+                quick_notes=saved_notes
             )
             
         except Exception as e:
