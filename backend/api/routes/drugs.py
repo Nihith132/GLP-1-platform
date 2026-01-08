@@ -107,15 +107,27 @@ async def get_drug_by_id(drug_id: int):
             # Get sections
             sections_query = select(DBDrugSection).where(
                 DBDrugSection.drug_label_id == drug_id
-            ).order_by(DBDrugSection.order)
+            )
             
             sections_result = await session.execute(sections_query)
-            sections = sections_result.scalars().all()
+            sections_list = list(sections_result.scalars().all())
+            
+            # Sort sections hierarchically by section_number
+            def parse_section_number(section_num):
+                """Convert section_number like '1.2.3' to tuple (1, 2, 3) for sorting"""
+                if not section_num:
+                    return (999999,)  # Put sections without numbers at end
+                try:
+                    return tuple(int(x) for x in str(section_num).split('.'))
+                except:
+                    return (999999,)
+            
+            sections_list.sort(key=lambda s: parse_section_number(s.section_number))
             
             # Convert to response model
             drug_dict = DrugDetail.model_validate(drug).model_dump()
             drug_dict['sections'] = [
-                DrugSection.model_validate(section) for section in sections
+                DrugSection.model_validate(section) for section in sections_list
             ]
             
             return DrugWithSections(**drug_dict)
@@ -187,43 +199,3 @@ async def get_drug_section(
                 detail=f"Failed to retrieve section: {str(e)}"
             )
 
-
-@router.get(
-    "/search/by-name",
-    response_model=List[DrugDetail],
-    summary="Search drugs by name",
-    description="Search for drugs by brand or generic name"
-)
-async def search_drugs_by_name(
-    q: str = Query(..., min_length=2, description="Search query"),
-    limit: int = Query(default=10, ge=1, le=50)
-):
-    """
-    Search drugs by name (brand or generic)
-    
-    Args:
-        q: Search query
-        limit: Maximum results
-        
-    Returns:
-        - List of matching drugs
-    """
-    async with AsyncSessionLocal() as session:
-        try:
-            query = select(DrugLabel).where(
-                DrugLabel.is_current_version == True
-            ).where(
-                (DrugLabel.name.ilike(f"%{q}%")) |
-                (DrugLabel.generic_name.ilike(f"%{q}%"))
-            ).order_by(DrugLabel.name).limit(limit)
-            
-            result = await session.execute(query)
-            drugs = result.scalars().all()
-            
-            return [DrugDetail.model_validate(drug) for drug in drugs]
-            
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Search failed: {str(e)}"
-            )

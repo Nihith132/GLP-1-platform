@@ -300,26 +300,25 @@ class FDAXMLParser:
     
     def _extract_text_content(self, section_elem) -> str:
         """
-        Extract clean text from a section, removing XML tags
-        Handles nested sections and tables
+        Extract HTML content from a section, preserving structure
+        Converts SPL XML to clean HTML while maintaining formatting
         """
-        text_parts = []
-        
         try:
             # Find all text elements
             text_elems = section_elem.findall('.//hl7:text', self.namespaces)
             
+            if not text_elems:
+                return ""
+            
+            html_parts = []
             for text_elem in text_elems:
-                # Get all text content, including nested elements
-                text = self._get_element_text(text_elem)
-                if text:
-                    text_parts.append(text)
+                # Convert XML to HTML preserving structure
+                html = self._xml_to_html(text_elem)
+                if html:
+                    html_parts.append(html)
             
-            # Join with double newline for readability
-            content = '\n\n'.join(text_parts)
-            
-            # Clean up whitespace
-            content = self._clean_text(content)
+            # Join with spacing
+            content = '\n\n'.join(html_parts)
             
             return content
             
@@ -327,43 +326,178 @@ class FDAXMLParser:
             logger.debug(f"Failed to extract text content: {e}")
             return ""
     
-    def _get_element_text(self, elem) -> str:
+    def _xml_to_html(self, elem) -> str:
         """
-        Recursively extract all text from an element and its children
+        Convert SPL XML element to HTML, preserving structure
+        Maps SPL tags to semantic HTML
         """
+        html_parts = []
+        
+        # Handle different element types
+        tag = elem.tag.replace('{urn:hl7-org:v3}', '')
+        
+        if tag == 'text':
+            # Process all children
+            for child in elem:
+                child_html = self._process_child_element(child)
+                if child_html:
+                    html_parts.append(child_html)
+            
+            # Add any direct text
+            if elem.text and elem.text.strip():
+                html_parts.insert(0, f'<p>{elem.text.strip()}</p>')
+        
+        return '\n'.join(html_parts)
+    
+    def _process_child_element(self, elem) -> str:
+        """
+        Process individual child elements and convert to HTML
+        """
+        tag = elem.tag.replace('{urn:hl7-org:v3}', '')
+        text = elem.text.strip() if elem.text else ''
+        tail = elem.tail.strip() if elem.tail else ''
+        
+        # Map SPL tags to HTML
+        if tag == 'paragraph':
+            content = text
+            for child in elem:
+                content += self._process_inline_element(child)
+            return f'<p>{content}</p>' + (f'<p>{tail}</p>' if tail else '')
+        
+        elif tag == 'list':
+            list_type = elem.get('listType', 'unordered')
+            list_tag = 'ol' if list_type == 'ordered' else 'ul'
+            items = []
+            for item in elem.findall('.//hl7:item', self.namespaces):
+                item_text = self._get_item_text(item)
+                if item_text:
+                    items.append(f'<li>{item_text}</li>')
+            return f'<{list_tag}>\n' + '\n'.join(items) + f'\n</{list_tag}>'
+        
+        elif tag == 'table':
+            return self._process_table(elem)
+        
+        elif tag == 'content':
+            # Inline formatting
+            style_code = elem.get('styleCode', '')
+            content = text
+            for child in elem:
+                content += self._process_inline_element(child)
+            
+            if 'bold' in style_code.lower():
+                return f'<strong>{content}</strong>'
+            elif 'italics' in style_code.lower():
+                return f'<em>{content}</em>'
+            elif 'underline' in style_code.lower():
+                return f'<u>{content}</u>'
+            else:
+                return content
+        
+        elif tag == 'br':
+            return '<br/>'
+        
+        else:
+            # Default: extract text
+            return text + ''.join([self._process_inline_element(child) for child in elem])
+    
+    def _process_inline_element(self, elem) -> str:
+        """Process inline elements like <content>, <sub>, <sup>"""
+        tag = elem.tag.replace('{urn:hl7-org:v3}', '')
+        text = elem.text.strip() if elem.text else ''
+        tail = elem.tail.strip() if elem.tail else ''
+        
+        if tag == 'content':
+            style_code = elem.get('styleCode', '')
+            content = text
+            for child in elem:
+                content += self._process_inline_element(child)
+            
+            if 'bold' in style_code.lower():
+                return f'<strong>{content}</strong>{tail}'
+            elif 'italics' in style_code.lower():
+                return f'<em>{content}</em>{tail}'
+            elif 'underline' in style_code.lower():
+                return f'<u>{content}</u>{tail}'
+            else:
+                return f'{content}{tail}'
+        
+        elif tag == 'sub':
+            return f'<sub>{text}</sub>{tail}'
+        
+        elif tag == 'sup':
+            return f'<sup>{text}</sup>{tail}'
+        
+        elif tag == 'br':
+            return '<br/>'
+        
+        else:
+            return text + tail
+    
+    def _get_item_text(self, item_elem) -> str:
+        """Extract text from list item, including nested elements"""
         text_parts = []
         
-        # Get direct text
-        if elem.text:
-            text_parts.append(elem.text.strip())
+        if item_elem.text and item_elem.text.strip():
+            text_parts.append(item_elem.text.strip())
         
-        # Get text from children
-        for child in elem:
-            child_text = self._get_element_text(child)
-            if child_text:
-                text_parts.append(child_text)
+        for child in item_elem:
+            child_tag = child.tag.replace('{urn:hl7-org:v3}', '')
+            if child_tag == 'content':
+                text_parts.append(self._process_inline_element(child))
+            else:
+                if child.text and child.text.strip():
+                    text_parts.append(child.text.strip())
             
-            # Get tail text (text after child element)
-            if child.tail:
+            if child.tail and child.tail.strip():
                 text_parts.append(child.tail.strip())
         
         return ' '.join(text_parts)
     
-    def _clean_text(self, text: str) -> str:
-        """
-        Clean and normalize extracted text
-        """
-        if not text:
-            return ""
+    def _process_table(self, table_elem) -> str:
+        """Convert SPL table to HTML table"""
+        html = ['<table class="fda-table">']
         
-        # Replace multiple spaces with single space
-        text = ' '.join(text.split())
+        # Process thead
+        thead = table_elem.find('.//hl7:thead', self.namespaces)
+        if thead is not None:
+            html.append('<thead>')
+            for row in thead.findall('.//hl7:tr', self.namespaces):
+                html.append('<tr>')
+                for cell in row.findall('.//hl7:th', self.namespaces):
+                    cell_text = self._get_cell_text(cell)
+                    html.append(f'<th>{cell_text}</th>')
+                html.append('</tr>')
+            html.append('</thead>')
         
-        # Replace multiple newlines with double newline
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        text = '\n\n'.join(lines)
+        # Process tbody
+        tbody = table_elem.find('.//hl7:tbody', self.namespaces)
+        if tbody is not None:
+            html.append('<tbody>')
+            for row in tbody.findall('.//hl7:tr', self.namespaces):
+                html.append('<tr>')
+                for cell in row.findall('.//hl7:td', self.namespaces):
+                    cell_text = self._get_cell_text(cell)
+                    html.append(f'<td>{cell_text}</td>')
+                html.append('</tr>')
+            html.append('</tbody>')
         
-        return text.strip()
+        html.append('</table>')
+        return '\n'.join(html)
+    
+    def _get_cell_text(self, cell_elem) -> str:
+        """Extract text from table cell"""
+        text_parts = []
+        
+        if cell_elem.text and cell_elem.text.strip():
+            text_parts.append(cell_elem.text.strip())
+        
+        for child in cell_elem:
+            child_text = self._process_inline_element(child)
+            if child_text:
+                text_parts.append(child_text)
+        
+        return ' '.join(text_parts)
+    
 
 
 # Convenience function

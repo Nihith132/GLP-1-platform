@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
 
-from api.routes import drugs, search, chat, analytics
+from api.routes import drugs, search, chat, analytics, compare, reports, version_check, watchdog
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +34,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # React dev server
+        "http://localhost:3000",  # React dev server (primary)
+        "http://localhost:3001",  # React dev server (alternate)
         "http://localhost:5173",  # Vite dev server
         # Add production domains here
     ],
@@ -49,6 +50,11 @@ app.include_router(drugs.router, prefix="/api/drugs", tags=["Drugs"])
 app.include_router(search.router, prefix="/api/search", tags=["Search"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
+app.include_router(compare.router, prefix="/api/compare", tags=["Comparison"])
+app.include_router(reports.router, prefix="/api/reports", tags=["Reports"])
+app.include_router(version_check.router, prefix="/api/version-check", tags=["Version Check"])
+app.include_router(watchdog.router, prefix="/api/watchdog", tags=["Watchdog Automation"])
+app.include_router(watchdog.router, prefix="/api/watchdog", tags=["Watchdog Automation"])
 
 
 # Health check endpoint

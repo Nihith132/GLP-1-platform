@@ -33,76 +33,83 @@ async def get_platform_analytics():
     
     Returns:
         - Total drugs in database
-        - Total sections and embeddings
-        - Unique manufacturers
-        - Drug class distribution
-        - Most common section types
+        - Total manufacturers and drug types
+        - Active labels count
+        - Manufacturers and drug types breakdown
     """
     async with AsyncSessionLocal() as session:
         try:
-            # Total drugs
+            # Total current drugs (active labels)
             drug_count_result = await session.execute(
                 text("SELECT COUNT(*) as count FROM drug_labels WHERE is_current_version = true")
             )
             total_drugs = drug_count_result.scalar()
+            active_labels = total_drugs  # Same as total_drugs
             
-            # Total sections
-            section_count_result = await session.execute(
-                text("SELECT COUNT(*) as count FROM drug_sections")
-            )
-            total_sections = section_count_result.scalar()
-            
-            # Total embeddings
-            embedding_count_result = await session.execute(
-                text("SELECT COUNT(*) as count FROM section_embeddings")
-            )
-            total_embeddings = embedding_count_result.scalar()
-            
-            # Unique manufacturers
-            manufacturer_result = await session.execute(
+            # Total unique manufacturers
+            manufacturer_count_result = await session.execute(
                 text("""
-                    SELECT COUNT(DISTINCT manufacturer) as count 
-                    FROM drug_labels 
+                    SELECT COUNT(DISTINCT manufacturer) as count
+                    FROM drug_labels
                     WHERE is_current_version = true
                 """)
             )
-            unique_manufacturers = manufacturer_result.scalar()
+            total_manufacturers = manufacturer_count_result.scalar()
             
-            # Drug classes (generic names are used as proxy)
-            class_result = await session.execute(
+            # Total unique drug types (generic names)
+            drug_type_count_result = await session.execute(
+                text("""
+                    SELECT COUNT(DISTINCT generic_name) as count
+                    FROM drug_labels
+                    WHERE is_current_version = true AND generic_name IS NOT NULL
+                """)
+            )
+            total_drug_types = drug_type_count_result.scalar()
+            
+            # Manufacturers breakdown (top 10)
+            manufacturer_result = await session.execute(
+                text("""
+                    SELECT manufacturer, COUNT(*) as count 
+                    FROM drug_labels 
+                    WHERE is_current_version = true
+                    GROUP BY manufacturer
+                    ORDER BY count DESC
+                    LIMIT 10
+                """)
+            )
+            manufacturers = [{"name": row.manufacturer, "count": row.count} for row in manufacturer_result.fetchall()]
+            
+            # Drug types breakdown (top 10)
+            drug_type_result = await session.execute(
                 text("""
                     SELECT generic_name, COUNT(*) as count
                     FROM drug_labels
-                    WHERE is_current_version = true
+                    WHERE is_current_version = true AND generic_name IS NOT NULL
                     GROUP BY generic_name
                     ORDER BY count DESC
                     LIMIT 10
                 """)
             )
-            drug_classes = {row.generic_name: row.count for row in class_result.fetchall()}
+            drug_types = [{"name": row.generic_name, "count": row.count} for row in drug_type_result.fetchall()]
             
-            # Most common section types
-            section_type_result = await session.execute(
+            # Get latest updated date
+            updated_result = await session.execute(
                 text("""
-                    SELECT loinc_code, title, COUNT(*) as count
-                    FROM drug_sections
-                    GROUP BY loinc_code, title
-                    ORDER BY count DESC
-                    LIMIT 10
+                    SELECT MAX(last_updated) as last_update
+                    FROM drug_labels
+                    WHERE is_current_version = true
                 """)
             )
-            section_types = {
-                f"{row.title} ({row.loinc_code})": row.count 
-                for row in section_type_result.fetchall()
-            }
+            last_updated = updated_result.scalar()
             
             return PlatformAnalytics(
                 total_drugs=total_drugs,
-                total_sections=total_sections,
-                total_embeddings=total_embeddings,
-                unique_manufacturers=unique_manufacturers,
-                drug_classes=drug_classes,
-                common_sections=section_types
+                total_manufacturers=total_manufacturers,
+                total_drug_types=total_drug_types,
+                active_labels=active_labels,
+                manufacturers=manufacturers,
+                drug_types=drug_types,
+                last_updated=last_updated
             )
             
         except Exception as e:
@@ -203,24 +210,34 @@ async def get_drug_analytics(drug_id: int):
             )
             total_content_length = int(total_length_result.scalar() or 0)
             
-            # Placeholder for entity statistics
-            # In production, this would extract drug names, dosages, conditions, etc.
-            entity_stats = EntityStatistics(
-                drug_names=[drug.brand_name, drug.generic_name],
-                conditions=[],  # TODO: Extract from indications section
-                dosages=[],     # TODO: Extract from dosage section
-                warnings=[]     # TODO: Extract from warnings section
-            )
+            # Entity statistics from NER summary
+            ner_summary = drug.ner_summary or {}
+            total_entities = sum(ner_summary.values()) if ner_summary else 0
+            
+            # Create entity breakdown
+            entity_breakdown = []
+            if ner_summary:
+                for entity_type, count in sorted(ner_summary.items(), key=lambda x: x[1], reverse=True)[:10]:
+                    percentage = (count / total_entities * 100) if total_entities > 0 else 0
+                    entity_breakdown.append(EntityStatistics(
+                        entity_type=entity_type,
+                        count=count,
+                        percentage=round(percentage, 2)
+                    ))
+            
+            # Most common entities (top entities across all types)
+            most_common_entities = [
+                {"entity_type": et, "count": c} 
+                for et, c in sorted(ner_summary.items(), key=lambda x: x[1], reverse=True)[:5]
+            ] if ner_summary else []
             
             return DrugAnalytics(
                 drug_id=drug_id,
-                drug_name=drug.brand_name,
-                section_count=section_count,
-                chunk_count=chunk_count,
-                section_breakdown=section_breakdown,
-                entity_statistics=entity_stats,
-                avg_chunk_size=avg_chunk_size,
-                total_content_length=total_content_length
+                drug_name=drug.name,
+                total_sections=section_count,
+                total_entities=total_entities,
+                entity_breakdown=entity_breakdown,
+                most_common_entities=most_common_entities
             )
             
         except HTTPException:
@@ -229,124 +246,4 @@ async def get_drug_analytics(drug_id: int):
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to retrieve drug analytics: {str(e)}"
-            )
-
-
-@router.post(
-    "/compare",
-    response_model=ComparisonResponse,
-    summary="Compare drugs",
-    description="Compare multiple drugs side-by-side across various attributes"
-)
-async def compare_drugs(request: ComparisonRequest):
-    """
-    Compare multiple drugs
-    
-    Args:
-        request: Comparison request with drug IDs and comparison type
-        
-    Returns:
-        - Side-by-side comparison
-        - Similarities and differences
-        - Specific attribute comparisons
-    """
-    async with AsyncSessionLocal() as session:
-        try:
-            if len(request.drug_ids) < 2:
-                raise HTTPException(
-                    status_code=400,
-                    detail="At least 2 drugs are required for comparison"
-                )
-            
-            comparisons = []
-            
-            for drug_id in request.drug_ids:
-                # Get drug info
-                drug_result = await session.execute(
-                    text("SELECT * FROM drug_labels WHERE id = :drug_id"),
-                    {"drug_id": drug_id}
-                )
-                drug = drug_result.fetchone()
-                
-                if not drug:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Drug with id {drug_id} not found"
-                    )
-                
-                # Get sections for comparison
-                sections_result = await session.execute(
-                    text("""
-                        SELECT loinc_code, title, content
-                        FROM drug_sections
-                        WHERE drug_label_id = :drug_id
-                    """),
-                    {"drug_id": drug_id}
-                )
-                sections = sections_result.fetchall()
-                
-                # Build attributes dictionary
-                attributes = {
-                    "brand_name": drug.brand_name,
-                    "generic_name": drug.generic_name,
-                    "manufacturer": drug.manufacturer,
-                    "dosage_form": drug.dosage_form,
-                    "route": drug.route,
-                    "marketing_status": drug.marketing_status,
-                    "sections": [{"loinc": s.loinc_code, "title": s.title} for s in sections]
-                }
-                
-                # Add specific section content if requested
-                if request.attributes:
-                    for attr in request.attributes:
-                        for section in sections:
-                            if attr.lower() in section.title.lower():
-                                attributes[attr] = section.content[:500]  # Truncate
-                                break
-                
-                comparisons.append(
-                    DrugComparison(
-                        drug_id=drug_id,
-                        drug_name=drug.brand_name,
-                        attributes=attributes
-                    )
-                )
-            
-            # Identify similarities and differences
-            similarities = []
-            differences = []
-            
-            # Compare generic names
-            generic_names = [c.attributes.get("generic_name") for c in comparisons]
-            if len(set(generic_names)) == 1:
-                similarities.append(f"All drugs contain {generic_names[0]}")
-            else:
-                differences.append(f"Different active ingredients: {', '.join(set(generic_names))}")
-            
-            # Compare manufacturers
-            manufacturers = [c.attributes.get("manufacturer") for c in comparisons]
-            if len(set(manufacturers)) == 1:
-                similarities.append(f"All manufactured by {manufacturers[0]}")
-            else:
-                differences.append(f"Different manufacturers: {', '.join(set(manufacturers))}")
-            
-            # Compare dosage forms
-            dosage_forms = [c.attributes.get("dosage_form") for c in comparisons]
-            if len(set(dosage_forms)) == 1:
-                similarities.append(f"Same dosage form: {dosage_forms[0]}")
-            else:
-                differences.append(f"Different dosage forms: {', '.join(set(filter(None, dosage_forms)))}")
-            
-            return ComparisonResponse(
-                comparisons=comparisons,
-                similarities=similarities,
-                differences=differences
-            )
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Comparison failed: {str(e)}"
             )

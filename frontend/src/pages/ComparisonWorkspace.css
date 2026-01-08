@@ -1,0 +1,389 @@
+/* ==================== Comparison Workspace Styles ==================== */
+
+/* Main workspace layout */
+.comparison-workspace {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.comparison-header {
+  flex-shrink: 0;
+}
+
+/* Content area with dark grey background */
+.comparison-content {
+  background: #525659;
+  padding: 30px 20px;
+}
+
+/* Two-column grid layout */
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+/* Paper containers */
+.paper-container {
+  display: flex;
+  justify-content: center;
+}
+
+.paper-sheet {
+  max-width: 8.5in;
+  width: 100%;
+  min-height: 11in;
+  background: white;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+  padding: 0.5in 0.75in;
+}
+
+/* Drug header styling */
+.drug-header {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 3px solid #e5e7eb;
+}
+
+.source-header {
+  border-bottom-color: #3b82f6; /* blue for source */
+}
+
+.competitor-header {
+  border-bottom-color: #f59e0b; /* amber for competitor */
+}
+
+.drug-name {
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 18pt;
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+  color: #000;
+}
+
+.drug-meta {
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 10pt;
+  color: #374151;
+}
+
+.drug-meta p {
+  margin: 0.25rem 0;
+}
+
+/* Drug label content - Times New Roman styling */
+.drug-label-content {
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 11pt;
+  line-height: 1.6;
+  color: #000;
+  text-align: justify;
+}
+
+/* Section styling */
+.section {
+  margin-bottom: 1.5rem;
+  page-break-inside: avoid;
+}
+
+.section-title {
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 13pt;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+  padding-bottom: 4pt;
+  border-bottom: 2px solid #000;
+  color: #000;
+}
+
+.section-content {
+  margin-top: 0.75rem;
+}
+
+/* ==================== Lexical Diff Styles ==================== */
+
+.lexical-deletion {
+  background-color: #fee2e2; /* red-100 */
+  color: #dc2626; /* red-600 */
+  text-decoration: line-through;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.lexical-addition {
+  background-color: #dcfce7; /* green-100 */
+  color: #16a34a; /* green-600 */
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* ==================== Semantic Diff Styles ==================== */
+
+.semantic-segment {
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: 4px;
+  border-left: 4px solid transparent;
+  cursor: help;
+  transition: all 0.2s ease;
+}
+
+.semantic-segment:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transform: translateX(2px);
+}
+
+/* Green: Competitive advantages / High similarity */
+.semantic-green {
+  background-color: #dcfce7; /* green-100 */
+  border-left-color: #16a34a; /* green-600 */
+}
+
+.semantic-green:hover {
+  background-color: #bbf7d0; /* green-200 */
+}
+
+/* Yellow: Partial matches */
+.semantic-yellow {
+  background-color: #fef9c3; /* yellow-100 */
+  border-left-color: #eab308; /* yellow-500 */
+}
+
+.semantic-yellow:hover {
+  background-color: #fef08a; /* yellow-200 */
+}
+
+/* Red: Conflicts */
+.semantic-red {
+  background-color: #fee2e2; /* red-100 */
+  border-left-color: #dc2626; /* red-600 */
+}
+
+.semantic-red:hover {
+  background-color: #fecaca; /* red-200 */
+}
+
+/* Blue: Omissions (gaps to address) */
+.semantic-blue {
+  background-color: #dbeafe; /* blue-100 */
+  border-left-color: #3b82f6; /* blue-500 */
+}
+
+.semantic-blue:hover {
+  background-color: #bfdbfe; /* blue-200 */
+}
+
+/* Wavy underline for omissions */
+.semantic-underline-wavy {
+  text-decoration: underline wavy #3b82f6;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+/* ==================== Sidebar Styles ==================== */
+
+.sidebar {
+  flex-shrink: 0;
+}
+
+.sidebar h3 {
+  letter-spacing: 0.05em;
+}
+
+.sidebar nav button {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* ==================== Print Styles ==================== */
+
+@media print {
+  /* Hide UI elements */
+  .no-print,
+  .sidebar,
+  .comparison-header,
+  header,
+  button,
+  nav {
+    display: none !important;
+  }
+
+  /* Page setup */
+  @page {
+    size: letter;
+    margin: 0.5in 0.75in;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: white;
+    overflow: visible;
+  }
+
+  /* Each drug on separate page */
+  .comparison-workspace {
+    display: block;
+    overflow: visible;
+  }
+
+  .comparison-content {
+    background: white;
+    padding: 0;
+    display: block;
+    overflow: visible;
+  }
+
+  .comparison-grid {
+    display: block;
+    overflow: visible;
+  }
+
+  /* Each paper container on its own page */
+  .paper-container {
+    page-break-after: always;
+    page-break-inside: avoid;
+    display: block;
+    overflow: visible;
+    width: 100%;
+  }
+
+  .paper-container:last-child {
+    page-break-after: auto;
+  }
+
+  .paper-sheet {
+    max-width: 100% !important;
+    width: 100% !important;
+    min-height: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0.25in 0.5in !important;
+    box-shadow: none !important;
+    background: white !important;
+    overflow: visible !important;
+  }
+
+  /* Drug header in print */
+  .drug-header {
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .drug-name {
+    font-size: 16pt;
+  }
+
+  .drug-meta {
+    font-size: 9pt;
+  }
+
+  /* Drug label content in print */
+  .drug-label-content {
+    font-size: 11pt;
+    line-height: 1.5;
+    overflow: visible !important;
+  }
+
+  /* Section styling in print */
+  .section {
+    page-break-inside: avoid;
+    margin-bottom: 1rem;
+    overflow: visible !important;
+  }
+
+  .section-title {
+    font-size: 12pt;
+    padding-bottom: 3pt;
+    border-bottom: 2px solid #000;
+    page-break-after: avoid;
+  }
+
+  .section-content {
+    margin-top: 0.5rem;
+    overflow: visible !important;
+  }
+
+  /* Preserve lexical diff colors in print */
+  .lexical-deletion {
+    background-color: #fee2e2 !important;
+    color: #dc2626 !important;
+    text-decoration: line-through !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .lexical-addition {
+    background-color: #dcfce7 !important;
+    color: #16a34a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Preserve semantic diff colors in print */
+  .semantic-segment {
+    padding: 0.25rem;
+    margin-bottom: 0.25rem;
+    border-radius: 2px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .semantic-green {
+    background-color: #dcfce7 !important;
+    border-left: 3px solid #16a34a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .semantic-yellow {
+    background-color: #fef9c3 !important;
+    border-left: 3px solid #eab308 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .semantic-red {
+    background-color: #fee2e2 !important;
+    border-left: 3px solid #dc2626 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .semantic-blue {
+    background-color: #dbeafe !important;
+    border-left: 3px solid #3b82f6 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Remove hover effects in print */
+  .semantic-segment:hover {
+    box-shadow: none;
+    transform: none;
+  }
+
+  /* Ensure text visibility */
+  * {
+    overflow: visible !important;
+  }
+
+  /* Page breaks */
+  h1,
+  h2,
+  h3 {
+    page-break-after: avoid;
+  }
+
+  p,
+  div,
+  table,
+  ul,
+  ol {
+    page-break-inside: avoid;
+  }
+}

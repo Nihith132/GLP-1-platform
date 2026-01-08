@@ -67,6 +67,7 @@ class DrugLabel(Base):
 class DrugSection(Base):
     """
     Individual sections of a drug label (e.g., Dosage, Warnings)
+    with hierarchical structure support
     """
     __tablename__ = "drug_sections"
     
@@ -76,13 +77,19 @@ class DrugSection(Base):
     # Foreign Key to DrugLabel
     drug_label_id = Column(Integer, ForeignKey("drug_labels.id", ondelete="CASCADE"), nullable=False)
     
+    # Hierarchical Structure (NEW)
+    section_number = Column(String(20), index=True)  # "1", "1.1", "1.2.1"
+    level = Column(Integer, default=1)  # 1=main, 2=sub, 3=subsub
+    parent_section_id = Column(Integer, ForeignKey("drug_sections.id", ondelete="CASCADE"), nullable=True)
+    
     # Section Identification
-    loinc_code = Column(String(50), nullable=False, index=True)
+    loinc_code = Column(String(50), nullable=True, index=True)  # Nullable for subsections
     title = Column(String(255), nullable=False)
     order = Column(Integer, default=0)
     
     # Content
-    content = Column(Text, nullable=False)
+    content = Column(Text, nullable=False)  # Plain text
+    content_html = Column(Text, nullable=True)  # Rich HTML (NEW)
     
     # NER Data (JSONB for extracted entities)
     ner_entities = Column(JSONB, default=[])
@@ -94,9 +101,17 @@ class DrugSection(Base):
     drug_label = relationship("DrugLabel", back_populates="sections")
     embeddings = relationship("SectionEmbedding", back_populates="section", cascade="all, delete-orphan")
     
+    # Hierarchical relationships (NEW) - self-referential for parent-child
+    children = relationship("DrugSection",
+                          backref="parent",
+                          remote_side=[id])
+    
     # Indexes
     __table_args__ = (
         Index('idx_section_drug_loinc', 'drug_label_id', 'loinc_code'),
+        Index('idx_section_parent', 'parent_section_id'),
+        Index('idx_section_level', 'level'),
+        Index('idx_section_number', 'drug_label_id', 'section_number'),
     )
     
     def __repr__(self):

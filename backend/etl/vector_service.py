@@ -6,6 +6,11 @@ Creates TWO types of embeddings:
 2. Section-level embeddings (for RAG chatbot)
 """
 
+# Disable TensorFlow before any imports
+import os
+os.environ['USE_TF'] = '0'
+os.environ['USE_TORCH'] = '1'
+
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Optional
 import numpy as np

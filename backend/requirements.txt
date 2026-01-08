@@ -18,7 +18,7 @@ pinecone-client==3.0.2
 
 # AI/ML
 transformers==4.37.2
-torch==2.1.2
+torch==2.2.0
 sentence-transformers==2.3.1
 groq==0.4.1  # Groq API client
 

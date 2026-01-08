@@ -104,6 +104,113 @@ Please provide a comprehensive answer based ONLY on the information provided abo
         return f"Error generating response: {str(e)}\n\nRetrieved context:\n{context_text[:500]}..."
 
 
+def generate_comparative_response(query: str, drugs_data: dict) -> str:
+    """
+    Generate comparative analysis using Groq LLM
+    
+    Compares multiple drugs based on retrieved sections and user question.
+    Designed for comparative queries like:
+    - "What are the differences between Drug A and Drug B?"
+    - "Compare side effects of these medications"
+    - "Which drug has better cardiovascular outcomes?"
+    
+    Args:
+        query: User's comparative question
+        drugs_data: Dictionary of drug names to their sections
+                   {drug_name: {"generic_name": str, "sections": [...]}}
+        
+    Returns:
+        LLM-generated comparative analysis
+    """
+    if not drugs_data:
+        return "I couldn't find relevant information to compare the drugs."
+    
+    # Build comparative context
+    context_parts = []
+    for drug_name, data in drugs_data.items():
+        drug_context = f"\n{'='*80}\nDRUG: {drug_name} ({data['generic_name']})\n{'='*80}\n"
+        
+        # Add top sections from this drug
+        for i, section in enumerate(data['sections'][:2], 1):  # Top 2 sections per drug
+            drug_context += f"\n[Section {i}: {section['section_title']}]\n"
+            drug_context += f"{section['chunk_text']}\n"
+        
+        context_parts.append(drug_context)
+    
+    context_text = "\n".join(context_parts)
+    
+    # Create comparative system prompt
+    system_prompt = """You are a medical information assistant specialized in comparative analysis of FDA drug labels.
+
+Your role:
+- Compare drugs ONLY based on the provided label excerpts
+- Identify key similarities and differences
+- Organize comparison by relevant categories (indications, dosing, safety, etc.)
+- Be precise and cite specific information from each drug
+- Highlight clinically significant differences
+- Use clear, structured formatting for easy reading
+
+Important:
+- DO NOT make up information
+- DO NOT use knowledge outside the provided context
+- DO NOT provide medical advice or treatment recommendations
+- Always mention that prescribing decisions should be made by healthcare providers
+- If a particular aspect is not covered in the provided context, state that clearly"""
+
+    # Create comparative user prompt
+    user_prompt = f"""Based on the following excerpts from FDA drug labels, please provide a detailed comparison addressing the user's question.
+
+DRUG LABEL EXCERPTS:
+{context_text}
+
+USER QUESTION:
+{query}
+
+Please provide a structured comparison that:
+1. Directly answers the user's comparative question
+2. Highlights key similarities across the drugs
+3. Identifies important differences between the drugs
+4. Organizes information by relevant categories (if applicable)
+5. Uses bullet points or tables for clarity
+
+Format your response with clear headings and cite specific drug names."""
+
+    try:
+        # Call Groq API for comparative analysis
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ],
+            model=groq_model,
+            temperature=0.3,  # Lower temperature for factual comparison
+            max_tokens=1500,  # More tokens for detailed comparison
+            top_p=0.9
+        )
+        
+        response = chat_completion.choices[0].message.content
+        return response
+        
+    except Exception as e:
+        # Fallback to basic comparison if Groq fails
+        fallback = f"Error generating comparative analysis: {str(e)}\n\n"
+        fallback += f"Comparing {len(drugs_data)} drugs:\n\n"
+        
+        for drug_name, data in drugs_data.items():
+            fallback += f"**{drug_name}** ({data['generic_name']}):\n"
+            if data['sections']:
+                fallback += f"- {data['sections'][0]['section_title']}: "
+                fallback += f"{data['sections'][0]['chunk_text'][:200]}...\n\n"
+        
+        return fallback
+
+
 @router.post(
     "/ask",
     response_model=ChatResponse,
@@ -312,16 +419,8 @@ async def chat_compare(request: ChatRequest):
                     "similarity_score": float(row.similarity_score)
                 })
             
-            # Generate comparative response
-            response_text = f"""Comparing {len(drugs_data)} drugs based on your question:
-
-"""
-            for drug_name, data in drugs_data.items():
-                response_text += f"\n**{drug_name}** ({data['generic_name']}):\n"
-                if data['sections']:
-                    response_text += f"{data['sections'][0]['chunk_text'][:200]}...\n"
-            
-            response_text += "\n\nNote: This is a demo response. Production would use LLM for detailed comparison."
+            # Generate comparative response using Groq LLM
+            response_text = generate_comparative_response(request.message, drugs_data)
             
             # Create citations from all drugs
             citations = []

@@ -1,0 +1,108 @@
+import { useState, useEffect } from 'react';
+import { reportService } from '@/services/reportService';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { Loading } from '../components/ui/Loading';
+import { FileText, Calendar, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import type { Report } from '@/types';
+
+export function Reports() {
+  const [reports, setReports] = useState<Report[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    loadReports();
+  }, []);
+
+  const loadReports = async () => {
+    try {
+      setIsLoading(true);
+      const data = await reportService.getAllReports();
+      setReports(data);
+    } catch (err) {
+      console.error('Error loading reports:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this report?')) return;
+
+    try {
+      await reportService.deleteReport(id);
+      setReports(reports.filter((r) => r.id !== id));
+    } catch (err) {
+      console.error('Error deleting report:', err);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-8rem)]">
+        <Loading size="lg" text="Loading reports..." />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Reports</h1>
+          <p className="text-muted-foreground mt-2">
+            View and manage generated reports
+          </p>
+        </div>
+      </div>
+
+      {reports.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+            <p className="text-muted-foreground">No reports yet</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {reports.map((report) => (
+            <Card key={report.id}>
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <CardTitle className="text-lg">{report.title}</CardTitle>
+                    <div className="flex items-center gap-2 mt-2">
+                      <Badge variant="secondary">{report.report_type}</Badge>
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        {new Date(report.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-2">
+                  <Link to={`/reports/${report.id}`} className="flex-1">
+                    <Button variant="outline" className="w-full">
+                      View Report
+                    </Button>
+                  </Link>
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    onClick={() => handleDelete(report.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
