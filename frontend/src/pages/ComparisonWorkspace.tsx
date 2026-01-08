@@ -1,10 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { comparisonService } from '@/services/comparisonService';
 import { chatService } from '@/services/chatService';
 import { Loading } from '../components/ui/Loading';
 import { Button } from '../components/ui/Button';
 import { formatAIText } from '@/utils/formatText';
+import { SaveReportModal } from '../components/SaveReportModal';
+import { ComparisonNotesModal } from '../components/ComparisonNotesModal';
+import { HighlightPopup } from '../components/HighlightPopup';
+import { useTextSelection } from '../hooks/useTextSelection';
+import { useComparisonWorkspaceStore } from '../store/comparisonWorkspaceStore';
 import { 
   ArrowLeft, 
   Printer,
@@ -18,7 +23,13 @@ import {
   Lightbulb,
   BarChart3,
   ExternalLink,
-  ArrowLeftRight
+  ArrowLeftRight,
+  Save,
+  Building2,
+  Calendar,
+  StickyNote,
+  Star,
+  Flag
 } from 'lucide-react';
 import './ComparisonWorkspace.css';
 
@@ -77,8 +88,11 @@ interface SemanticDiffSummary {
 }
 
 interface ChatMessage {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
+  timestamp: string;
+  question?: string;
   citations?: Array<{
     section_name: string;
     drug_name: string;
@@ -112,6 +126,25 @@ interface ExecutiveSummary {
 export function ComparisonWorkspace() {
   const { sourceId, competitorId } = useParams<{ sourceId: string; competitorId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  
+  // Comparison workspace store
+  const { 
+    saveAsComparisonReport,
+    loadComparisonReport,
+    clearComparison,
+    setComparisonDrugs,
+    sourceHighlights,
+    addSourceHighlight,
+    addCitedNote,
+    citedNotes,
+    uncitedNotes,
+    flaggedChats: storedFlaggedChats,
+    flagChat,
+    unflagChat,
+    starredDiffIds,
+    toggleStarDiff
+  } = useComparisonWorkspaceStore();
   
   const [sourceDrug, setSourceDrug] = useState<DrugWithSections | null>(null);
   const [competitorDrug, setCompetitorDrug] = useState<DrugWithSections | null>(null);
@@ -127,6 +160,13 @@ export function ComparisonWorkspace() {
   // UI state
   const [showDifferencesPanel, setShowDifferencesPanel] = useState(false);
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
+  const [showOnlyStarred, setShowOnlyStarred] = useState(false);
+  
+  // Save Report modal state
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  
+  // Notes modal state
+  const [showNotesModal, setShowNotesModal] = useState(false);
   
   // Chat state
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -148,17 +188,65 @@ export function ComparisonWorkspace() {
   const [executiveSummary, setExecutiveSummary] = useState<ExecutiveSummary | null>(null);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   
+  // Text selection and highlighting for source drug
+  const sourceContentRef = useRef<HTMLDivElement>(null);
+  const { selection, clearSelection } = useTextSelection(sourceContentRef);
+  const [showHighlightPopup, setShowHighlightPopup] = useState(false);
+  const [highlightPopupPosition, setHighlightPopupPosition] = useState({ top: 0, left: 0 });
+  
   const sectionRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const sourceScrollRef = useRef<HTMLDivElement>(null);
   const competitorScrollRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  
+  // Show highlight popup when text is selected
+  useEffect(() => {
+    if (selection && selection.rect) {
+      setHighlightPopupPosition({
+        top: selection.rect.top + window.scrollY,
+        left: selection.rect.left + (selection.rect.width / 2),
+      });
+      setShowHighlightPopup(true);
+    } else {
+      setShowHighlightPopup(false);
+    }
+  }, [selection]);
 
   useEffect(() => {
     if (sourceId && competitorId) {
+      // ⭐ CRITICAL FIX: Check if this is a NEW comparison or loading a saved report
+      const urlParams = new URLSearchParams(location.search);
+      const isLoadingReport = urlParams.get('loadReport');
+      
+      // If NOT loading a report, this is a new comparison -> CLEAR OLD STATE
+      if (!isLoadingReport) {
+        console.log('🧹 Clearing old comparison state for NEW comparison');
+        clearComparison();
+      }
+      
       const competitorIds = competitorId.split(',').map(id => parseInt(id.trim()));
       loadComparisonData(parseInt(sourceId), competitorIds);
     }
   }, [sourceId, competitorId]);
+
+  // ⭐ Report Load Detection
+  useEffect(() => {
+    const urlParams = new URLSearchParams(location.search);
+    const reportId = urlParams.get('loadReport');
+    
+    if (reportId) {
+      const reportData = sessionStorage.getItem('pendingReportLoad');
+      if (reportData) {
+        try {
+          const report = JSON.parse(reportData);
+          loadComparisonReportData(report);
+          sessionStorage.removeItem('pendingReportLoad');
+        } catch (error) {
+          console.error('Failed to load comparison report:', error);
+        }
+      }
+    }
+  }, [location.search]);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -166,6 +254,88 @@ export function ComparisonWorkspace() {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatMessages, isChatOpen]);
+  
+  // Apply source drug highlights
+  useEffect(() => {
+    if (!sourceDrug || !sourceContentRef.current) return;
+
+    const applyHighlights = () => {
+      if (!sourceContentRef.current) return;
+
+      // Clear all existing highlights first
+      const existingMarks = sourceContentRef.current.querySelectorAll('.highlight-mark');
+      existingMarks.forEach(mark => {
+        const parent = mark.parentNode;
+        if (parent) {
+          while (mark.firstChild) {
+            parent.insertBefore(mark.firstChild, mark);
+          }
+          parent.removeChild(mark);
+        }
+      });
+      
+      // Normalize text nodes after clearing
+      sourceContentRef.current.querySelectorAll('.section-content').forEach(el => el.normalize());
+
+      // If no highlights, we're done
+      if (sourceHighlights.length === 0) return;
+
+      // Apply each highlight
+      sourceHighlights.forEach(highlight => {
+        const sectionElement = sourceContentRef.current?.querySelector(
+          `[data-section-id="${highlight.sectionId}"] .section-content`
+        );
+        
+        if (!sectionElement) return;
+
+        const textNodes: Node[] = [];
+        const walker = document.createTreeWalker(
+          sectionElement,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
+
+        let node;
+        while ((node = walker.nextNode())) {
+          textNodes.push(node);
+        }
+
+        let currentOffset = 0;
+        for (const textNode of textNodes) {
+          const textLength = textNode.textContent?.length || 0;
+          const nodeStart = currentOffset;
+          const nodeEnd = currentOffset + textLength;
+
+          if (highlight.position.start < nodeEnd && highlight.position.end > nodeStart) {
+            const range = document.createRange();
+            const startOffset = Math.max(0, highlight.position.start - nodeStart);
+            const endOffset = Math.min(textLength, highlight.position.end - nodeStart);
+
+            try {
+              range.setStart(textNode, startOffset);
+              range.setEnd(textNode, endOffset);
+
+              const mark = document.createElement('mark');
+              mark.className = `highlight-mark ${highlight.color === 'red' ? 'bg-red-200' : 'bg-blue-200'}`;
+              mark.style.cursor = 'pointer';
+              mark.dataset.highlightId = highlight.id;
+              
+              range.surroundContents(mark);
+            } catch (e) {
+              console.warn('Failed to apply highlight:', e);
+            }
+          }
+
+          currentOffset = nodeEnd;
+        }
+      });
+    };
+
+    // Apply highlights after a short delay to ensure content is rendered
+    const timeoutId = setTimeout(applyHighlights, 100);
+    
+    return () => clearTimeout(timeoutId);
+  }, [sourceDrug, sourceHighlights]);
 
   const handleSwapDrugs = () => {
     // Cycle through competitors, keeping source fixed
@@ -181,6 +351,44 @@ export function ComparisonWorkspace() {
     setShowDifferencesPanel(false);
     setExecutiveSummary(null);
   };
+  
+  // Handle source drug highlighting
+  const handleHighlightColor = (color: 'red' | 'blue') => {
+    if (!selection) return;
+
+    const highlightId = `highlight-${Date.now()}-${Math.random()}`;
+    const highlight = {
+      id: highlightId,
+      sectionId: selection.sectionId.toString(),
+      text: selection.text.substring(0, 100),
+      color,
+      position: {
+        start: selection.startOffset,
+        end: selection.endOffset,
+      },
+      created_at: new Date().toISOString(),
+    };
+
+    addSourceHighlight(highlight);
+    
+    // Automatically create a cited note for this highlight
+    const note = {
+      id: `note-${Date.now()}-${Math.random()}`,
+      content: '', // User will fill this in later
+      highlightId: highlightId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    addCitedNote(note, highlightId);
+    
+    clearSelection();
+    setShowHighlightPopup(false);
+  };
+
+  const handleCancelHighlight = () => {
+    clearSelection();
+    setShowHighlightPopup(false);
+  };
 
   const loadComparisonData = async (source: number, competitors: number[]) => {
     try {
@@ -191,6 +399,15 @@ export function ComparisonWorkspace() {
       setAllCompetitors(data.competitors);
       setCompetitorDrug(data.competitors[0]);
       setSelectedCompetitorIndex(0);
+      
+      // ⭐ CRITICAL: Update store with drug IDs and names for saving reports
+      const competitorNames = data.competitors.map(c => c.name);
+      setComparisonDrugs(
+        data.source_drug.id,
+        data.source_drug.name,
+        competitors,
+        competitorNames
+      );
       
       // Set first common section as active
       const sourceLoincs = data.source_drug.sections.map(s => s.loinc_code);
@@ -210,8 +427,57 @@ export function ComparisonWorkspace() {
     }
   };
 
+  const loadComparisonReportData = async (report: any) => {
+    try {
+      // Load report state into store
+      loadComparisonReport(report);
+      
+      // Extract workspace state
+      const workspaceState = report.workspace_state;
+      
+      // Load drugs (this will also trigger normal comparison data loading)
+      const sourceDrugId = workspaceState?.source_drug_id || workspaceState?.sourceDrugId;
+      const competitorIds = workspaceState?.competitor_drug_ids || workspaceState?.competitorDrugIds || [];
+      
+      if (sourceDrugId && competitorIds.length > 0) {
+        await loadComparisonData(sourceDrugId, competitorIds);
+        
+        // After drugs are loaded, restore UI state
+        if (workspaceState?.show_differences_panel || workspaceState?.showDifferencesPanel) {
+          // Re-run semantic diff for current competitor
+          if (competitorIds[0]) {
+            await loadSemanticDiff();
+          }
+        }
+        
+        // Restore scroll positions after a brief delay
+        setTimeout(() => {
+          const scrollPositions = workspaceState?.scroll_positions || workspaceState?.scrollPositions;
+          if (scrollPositions) {
+            if (sourceScrollRef.current && scrollPositions.source) {
+              sourceScrollRef.current.scrollTop = scrollPositions.source;
+            }
+            if (competitorScrollRef.current && scrollPositions.competitor) {
+              competitorScrollRef.current.scrollTop = scrollPositions.competitor;
+            }
+          }
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Failed to load comparison report data:', error);
+      alert('Failed to restore report state. Please try again.');
+    }
+  };
+
   const loadSemanticDiff = async () => {
     if (!sourceId || !competitorId) return;
+    
+    // ⭐ FIX 4: Skip loading if data already exists (cached)
+    if (semanticDiff.length > 0) {
+      console.log('✓ Semantic diff already loaded, using cached data');
+      setShowDifferencesPanel(true);
+      return;
+    }
     
     try {
       setIsLoadingDiff(true);
@@ -231,6 +497,13 @@ export function ComparisonWorkspace() {
 
   const loadExecutiveSummary = async () => {
     if (!sourceId || !competitorId) return;
+    
+    // ⭐ FIX 4: Skip loading if summary already exists (cached)
+    if (executiveSummary) {
+      console.log('✓ Executive summary already loaded, using cached data');
+      setShowSummaryModal(true);
+      return;
+    }
     
     setIsLoadingSummary(true);
     setShowSummaryModal(false);
@@ -297,8 +570,10 @@ export function ComparisonWorkspace() {
     if (!chatInput.trim() || !sourceDrug || !competitorDrug) return;
 
     const userMessage: ChatMessage = {
+      id: `msg-${Date.now()}-${Math.random()}`,
       role: 'user',
-      content: chatInput
+      content: chatInput,
+      timestamp: new Date().toISOString(),
     };
 
     setChatMessages(prev => [...prev, userMessage]);
@@ -314,9 +589,12 @@ export function ComparisonWorkspace() {
       });
 
       const assistantMessage: ChatMessage = {
+        id: `msg-${Date.now()}-${Math.random()}`,
         role: 'assistant',
         content: response.answer,
         citations: response.citations,
+        timestamp: new Date().toISOString(),
+        question: currentInput,
       };
 
       setChatMessages(prev => [...prev, assistantMessage]);
@@ -328,8 +606,10 @@ export function ComparisonWorkspace() {
     } catch (err) {
       console.error('Error sending message:', err);
       const errorMessage: ChatMessage = {
+        id: `msg-${Date.now()}-${Math.random()}`,
         role: 'assistant',
-        content: 'Sorry, I encountered an error processing your question. Please try again.'
+        content: 'Sorry, I encountered an error processing your question. Please try again.',
+        timestamp: new Date().toISOString(),
       };
       setChatMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -433,104 +713,125 @@ export function ComparisonWorkspace() {
   const commonSections = sourceDrug.sections.filter(s => commonLoincs.includes(s.loinc_code));
 
   return (
-    <div className="comparison-workspace h-screen flex flex-col bg-[#525659]">
-      {/* Header */}
-      <header className="comparison-header no-print bg-white border-b border-border px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate('/dashboard')}
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
-          </Button>
-          <div className="text-lg font-semibold">
-            <span className="text-primary">{sourceDrug.name}</span>
-            <span className="text-muted-foreground mx-2">vs</span>
-            <span className="text-orange-600 dark:text-orange-400">{competitorDrug.name}</span>
+    <div className="comparison-workspace h-screen flex flex-col overflow-hidden bg-background">
+      {/* Header - Match Analysis Workspace Style */}
+      <div className="border-b border-border bg-card px-6 py-4 flex-shrink-0 no-print">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/dashboard')}
+              className="hover:bg-accent"
+            >
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">{sourceDrug.name}</h1>
+              <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  <Building2 className="w-4 h-4" />
+                  {sourceDrug.manufacturer}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Calendar className="w-4 h-4" />
+                  Version {sourceDrug.version}
+                </div>
+                <div className="flex items-center gap-1">
+                  <ArrowLeftRight className="w-4 h-4" />
+                  vs {competitorDrug.name}
+                </div>
+                {/* Competitor Selector (if multiple) */}
+                {allCompetitors && allCompetitors.length > 1 && (
+                  <div className="relative">
+                    <select
+                      value={selectedCompetitorIndex}
+                      onChange={(e) => handleCompetitorChange(parseInt(e.target.value))}
+                      className="px-2 py-1 pr-6 text-xs border border-border rounded bg-background appearance-none cursor-pointer hover:bg-accent"
+                    >
+                      {allCompetitors.map((comp, idx) => (
+                        <option key={comp.id} value={idx}>
+                          {comp.name}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none" />
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
           
-          {/* Swap Button - Only show if multiple competitors */}
-          {allCompetitors.length > 1 && (
+          <div className="flex items-center gap-2">
+            {/* Save Report Button - First, matching Analysis */}
             <Button
               variant="outline"
               size="sm"
-              onClick={handleSwapDrugs}
-              className="ml-2"
-              title="Cycle through competitors"
+              onClick={() => setShowSaveModal(true)}
+              className="no-print"
             >
-              <ArrowLeftRight className="h-4 w-4" />
+              <Save className="w-4 h-4 mr-2" />
+              Save Report
             </Button>
-          )}
-          
-          {/* Competitor Selector */}
-          {allCompetitors.length > 1 && (
-            <div className="relative">
-              <select
-                value={selectedCompetitorIndex}
-                onChange={(e) => handleCompetitorChange(parseInt(e.target.value))}
-                className="px-3 py-1.5 pr-8 text-sm border border-border rounded-lg bg-background appearance-none cursor-pointer hover:bg-accent"
-              >
-                {allCompetitors.map((comp, idx) => (
-                  <option key={comp.id} value={idx}>
-                    Competitor {idx + 1}: {comp.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none" />
-            </div>
-          )}
+            
+            {/* Print Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => window.print()}
+              className="no-print"
+            >
+              <Printer className="w-4 h-4 mr-2" />
+              Print
+            </Button>
+            
+            {/* Notes Button - Badge shows count */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowNotesModal(true)}
+              className="no-print relative"
+            >
+              <StickyNote className="w-4 h-4 mr-2" />
+              Notes
+              {(citedNotes.length + uncitedNotes.length) > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 text-xs bg-primary text-primary-foreground rounded-full">
+                  {citedNotes.length + uncitedNotes.length}
+                </span>
+              )}
+            </Button>
+            
+            {/* View Differences Button */}
+            <Button
+              variant={showDifferencesPanel ? 'default' : 'outline'}
+              size="sm"
+              onClick={loadSemanticDiff}
+              disabled={isLoadingDiff}
+              className="no-print"
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              {isLoadingDiff ? 'Loading...' : 'Differences'}
+            </Button>
+            
+            {/* Generate Summary Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadExecutiveSummary}
+              disabled={isLoadingSummary}
+              className="no-print"
+            >
+              {isLoadingSummary ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <BarChart3 className="w-4 h-4 mr-2" />
+              )}
+              Summary
+            </Button>
+          </div>
         </div>
-        
-        <div className="flex items-center gap-2">
-          {/* View Differences Button */}
-          <Button
-            variant="default"
-            size="sm"
-            onClick={loadSemanticDiff}
-            disabled={isLoadingDiff}
-          >
-            <FileText className="h-4 w-4 mr-2" />
-            {isLoadingDiff ? 'Loading...' : 'View Semantic Differences'}
-          </Button>
-          
-          {/* Generate Summary Button */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={loadExecutiveSummary}
-            disabled={isLoadingSummary}
-          >
-            {isLoadingSummary ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <BarChart3 className="h-4 w-4 mr-2" />
-            )}
-            {isLoadingSummary ? 'Generating...' : 'Generate Summary'}
-          </Button>
-          
-          {/* Chat Button */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsChatOpen(!isChatOpen)}
-          >
-            <MessageSquare className="h-4 w-4 mr-2" />
-            Ask AI
-          </Button>
-          
-          {/* Print Button */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => window.print()}
-          >
-            <Printer className="h-4 w-4 mr-2" />
-            Print
-          </Button>
-        </div>
-      </header>
+      </div>
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
@@ -573,7 +874,7 @@ export function ComparisonWorkspace() {
         <div className="flex-1 flex gap-2 p-2 overflow-hidden justify-center">
           {/* Source Drug Paper */}
           <div ref={sourceScrollRef} className="flex-1 overflow-y-auto">
-            <div className="paper-sheet">
+            <div className="paper-sheet" ref={sourceContentRef}>
               {/* Drug Header */}
               <div className="drug-header source-header">
                 <h1 className="drug-name" style={{ fontSize: '11pt' }}>{sourceDrug.name}</h1>
@@ -593,13 +894,15 @@ export function ComparisonWorkspace() {
                       sectionRefs.current[`source-${section.title}`] = el;
                     }}
                     className="section"
+                    data-section-id={section.id}
+                    data-section-title={section.title}
                   >
                     <h2 className="section-title" style={{ fontSize: '2.8pt' }}>{section.title}</h2>
-                    <div 
-                      className="section-content"
-                      style={{ fontSize: '3.5pt' }}
-                      dangerouslySetInnerHTML={{ __html: section.content_html || section.content }}
-                    />
+                    <div className="section-content drug-label-content" style={{ fontSize: '3.5pt' }}>
+                      <div 
+                        dangerouslySetInnerHTML={{ __html: section.content_html || section.content }}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -674,7 +977,22 @@ export function ComparisonWorkspace() {
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-6 border-b border-border">
-              <h2 className="text-2xl font-bold">Differences</h2>
+              <div className="flex items-center gap-4">
+                <h2 className="text-2xl font-bold">Differences</h2>
+                {starredDiffIds.length > 0 && (
+                  <button
+                    onClick={() => setShowOnlyStarred(!showOnlyStarred)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      showOnlyStarred
+                        ? 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    <Star className={`h-4 w-4 ${showOnlyStarred ? 'fill-current' : ''}`} />
+                    {showOnlyStarred ? 'Show All' : `Starred Only (${starredDiffIds.length})`}
+                  </button>
+                )}
+              </div>
               <button
                 onClick={() => setShowDifferencesPanel(false)}
                 className="p-2 hover:bg-gray-100 rounded-lg"
@@ -685,37 +1003,106 @@ export function ComparisonWorkspace() {
 
             {/* Modal Content */}
             <div className="flex-1 overflow-y-auto p-6">
-              {semanticDiff.map((diffSection) => (
-                <div key={diffSection.section_loinc} className="mb-8">
-                  <div className="flex items-center justify-between mb-4 pb-2 border-b">
-                    <h3 className="text-lg font-semibold text-primary">{diffSection.section_title}</h3>
-                    <button
-                      onClick={() => scrollToSection(diffSection.section_title)}
-                      className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 px-2 py-1 hover:bg-blue-50 rounded"
-                      title="Jump to section in document"
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                      View in Document
-                    </button>
-                  </div>
+              {(() => {
+                const hasAnyVisibleMatches = semanticDiff.some((diffSection) => {
+                  if (!showOnlyStarred) return true;
+                  return diffSection.matches.some((_, idx) => {
+                    const diffId = `${diffSection.section_loinc}_match_${idx}`;
+                    return starredDiffIds.includes(diffId);
+                  });
+                });
 
-                  <div className="space-y-4">
-                    {diffSection.matches.map((match, idx) => {
+                if (showOnlyStarred && !hasAnyVisibleMatches) {
+                  return (
+                    <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+                      <Star className="h-16 w-16 mb-4 text-gray-300" />
+                      <p className="text-lg font-medium">No starred differences yet</p>
+                      <p className="text-sm mt-2">Star important differences to save them for later review</p>
+                    </div>
+                  );
+                }
+
+                return semanticDiff.map((diffSection) => {
+                // Filter matches based on showOnlyStarred
+                const filteredMatches = showOnlyStarred
+                  ? diffSection.matches.filter((_, idx) => {
+                      const diffId = `${diffSection.section_loinc}_match_${idx}`;
+                      return starredDiffIds.includes(diffId);
+                    })
+                  : diffSection.matches;
+                
+                // Skip section if no matches after filtering
+                if (filteredMatches.length === 0) return null;
+                
+                return (
+                  <div key={diffSection.section_loinc} className="mb-8">
+                    <div className="flex items-center justify-between mb-4 pb-2 border-b">
+                      <h3 className="text-lg font-semibold text-primary">{diffSection.section_title}</h3>
+                      <button
+                        onClick={() => scrollToSection(diffSection.section_title)}
+                        className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 px-2 py-1 hover:bg-blue-50 rounded"
+                        title="Jump to section in document"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        View in Document
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      {filteredMatches.map((match, originalIdx) => {
+                        // Get original index for ID generation
+                        const idx = showOnlyStarred 
+                          ? diffSection.matches.indexOf(match)
+                          : originalIdx;
                       const sourceSegment = match.source_segment;
                       const competitorSegment = match.competitor_segment;
                       const diffType = sourceSegment?.diff_type || competitorSegment?.diff_type || 'neutral';
+                      
+                      // Create unique ID for this diff match
+                      const diffId = `${diffSection.section_loinc}_match_${idx}`;
+                      const isStarred = starredDiffIds.includes(diffId);
 
                       return (
                         <div
                           key={idx}
-                          className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
-                          onClick={() => {
-                            const sourceText = sourceSegment?.text || '';
-                            const competitorText = competitorSegment?.text || '';
-                            handleExplainSegment(sourceText, competitorText, diffSection.section_loinc);
-                          }}
+                          className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow"
                         >
-                          <div className="grid grid-cols-2 divide-x divide-gray-200">
+                          {/* Header with Star Button */}
+                          <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
+                            <div className="flex items-center gap-2 text-xs text-gray-600">
+                              <span className="font-medium">Match #{idx + 1}</span>
+                              {match.similarity_score !== null && (
+                                <span className="text-gray-500">
+                                  • Similarity: {(match.similarity_score * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleStarDiff(diffId);
+                              }}
+                              className={`p-1.5 rounded transition-colors ${
+                                isStarred 
+                                  ? 'text-yellow-500 hover:text-yellow-600 bg-yellow-50' 
+                                  : 'text-gray-400 hover:text-yellow-500 hover:bg-yellow-50'
+                              }`}
+                              title={isStarred ? 'Unstar this difference' : 'Star this difference'}
+                            >
+                              <Star 
+                                className={`h-4 w-4 ${isStarred ? 'fill-current' : ''}`}
+                              />
+                            </button>
+                          </div>
+
+                          <div 
+                            className="grid grid-cols-2 divide-x divide-gray-200 cursor-pointer"
+                            onClick={() => {
+                              const sourceText = sourceSegment?.text || '';
+                              const competitorText = competitorSegment?.text || '';
+                              handleExplainSegment(sourceText, competitorText, diffSection.section_loinc);
+                            }}
+                          >
                             {/* Source Column */}
                             <div className="p-4">
                               <div className="text-sm font-semibold text-gray-600 mb-2">{sourceDrug.name}</div>
@@ -761,7 +1148,9 @@ export function ComparisonWorkspace() {
                     })}
                   </div>
                 </div>
-              ))}
+              );
+            });
+              })()}
             </div>
 
             {/* Modal Footer with Stats */}
@@ -1000,6 +1389,17 @@ export function ComparisonWorkspace() {
         </div>
       )}
 
+      {/* Floating Chat Button - Match Analysis Workspace */}
+      {!isChatOpen && (
+        <button
+          onClick={() => setIsChatOpen(true)}
+          className="fixed bottom-6 right-6 bg-primary text-primary-foreground rounded-full p-4 shadow-lg hover:scale-110 transition-transform z-50 no-print"
+          aria-label="Open chat"
+        >
+          <MessageSquare className="w-6 h-6" />
+        </button>
+      )}
+
       {/* Chat Modal */}
       {isChatOpen && (
         <div className="fixed bottom-6 right-6 w-[450px] h-[600px] bg-white rounded-lg shadow-2xl flex flex-col z-50 border border-border">
@@ -1035,6 +1435,28 @@ export function ComparisonWorkspace() {
                         : 'bg-accent text-accent-foreground'
                     }`}
                   >
+                    {/* Flag button for assistant messages */}
+                    {msg.role === 'assistant' && (
+                      <div className="flex justify-end mb-2">
+                        <button
+                          onClick={() => {
+                            const isFlagged = storedFlaggedChats.some(c => c.id === msg.id);
+                            if (isFlagged) {
+                              unflagChat(msg.id);
+                            } else {
+                              flagChat(msg);
+                            }
+                          }}
+                          className={`p-1 rounded hover:bg-gray-200/50 transition-colors ${
+                            storedFlaggedChats.some(c => c.id === msg.id) ? 'text-yellow-600' : 'text-gray-500'
+                          }`}
+                          title={storedFlaggedChats.some(c => c.id === msg.id) ? 'Unflag' : 'Flag for report'}
+                        >
+                          <Flag className="h-4 w-4" fill={storedFlaggedChats.some(c => c.id === msg.id) ? 'currentColor' : 'none'} />
+                        </button>
+                      </div>
+                    )}
+                    
                     {msg.role === 'user' ? (
                       <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                     ) : (
@@ -1150,6 +1572,38 @@ export function ComparisonWorkspace() {
             </div>
           </div>
         </div>
+      )}
+      
+      {/* Save Report Modal */}
+      <SaveReportModal
+        isOpen={showSaveModal}
+        onClose={() => setShowSaveModal(false)}
+        reportType="comparison"
+        onSave={saveAsComparisonReport}
+        previewData={{
+          drugName: sourceDrug && competitorDrug 
+            ? `${sourceDrug.name} vs ${competitorDrug.name}` 
+            : 'Comparison',
+          highlightsCount: sourceHighlights.length,
+          notesCount: citedNotes.length + uncitedNotes.length,
+          flaggedChatsCount: storedFlaggedChats.length,
+          hasContent: sourceHighlights.length > 0 || citedNotes.length > 0 || uncitedNotes.length > 0 || storedFlaggedChats.length > 0
+        }}
+      />
+      
+      {/* Notes Modal */}
+      <ComparisonNotesModal
+        isOpen={showNotesModal}
+        onClose={() => setShowNotesModal(false)}
+      />
+      
+      {/* Highlight Popup for Source Drug */}
+      {showHighlightPopup && selection && (
+        <HighlightPopup
+          position={highlightPopupPosition}
+          onSelectColor={handleHighlightColor}
+          onCancel={handleCancelHighlight}
+        />
       )}
     </div>
   );

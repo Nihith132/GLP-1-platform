@@ -6,10 +6,32 @@ import { reportService } from '../services/reportService';
 interface SaveReportModalProps {
   isOpen: boolean;
   onClose: () => void;
+  reportType?: 'analysis' | 'comparison';
+  onSave?: (title: string, description?: string, tags?: string[]) => Promise<void>;
+  previewData?: {
+    drugName: string;
+    highlightsCount: number;
+    notesCount: number;
+    flaggedChatsCount: number;
+    hasContent: boolean;
+  };
 }
 
-export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClose }) => {
+export const SaveReportModal: React.FC<SaveReportModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  reportType = 'analysis',
+  onSave: customOnSave,
+  previewData
+}) => {
   const { saveAsReport, highlights, notes, flaggedChats, drugName } = useWorkspaceStore();
+  
+  // Use preview data if provided, otherwise use workspace store
+  const effectiveDrugName = previewData?.drugName || drugName;
+  const effectiveHighlightsCount = previewData?.highlightsCount ?? highlights.length;
+  const effectiveNotesCount = previewData?.notesCount ?? Object.keys(notes).length;
+  const effectiveFlaggedChatsCount = previewData?.flaggedChatsCount ?? flaggedChats.length;
+  const hasContent = previewData?.hasContent ?? (highlights.length > 0 || Object.keys(notes).length > 0 || flaggedChats.length > 0);
   
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -18,8 +40,6 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [existingReportTitles, setExistingReportTitles] = useState<string[]>([]);
-
-  const hasContent = highlights.length > 0 || notes.length > 0 || flaggedChats.length > 0;
 
   // Load existing report titles when modal opens
   useEffect(() => {
@@ -53,7 +73,7 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
     }
     
     if (!hasContent) {
-      return 'Cannot save empty report. Add highlights, notes, or flag chats first.';
+      return `Cannot save empty ${reportType} report. Add highlights, notes, or flag chats first.`;
     }
     return null;
   };
@@ -76,12 +96,16 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
         ? tags.split(',').map(t => t.trim()).filter(t => t.length > 0)
         : undefined;
 
-      // Save report using the store function
-      await saveAsReport(
-        title.trim(), 
-        description.trim() || undefined,
-        parsedTags
-      );
+      // Use custom save function if provided, otherwise use workspace store
+      if (customOnSave) {
+        await customOnSave(title.trim(), description.trim() || undefined, parsedTags);
+      } else {
+        await saveAsReport(
+          title.trim(), 
+          description.trim() || undefined,
+          parsedTags
+        );
+      }
       
       setSaveStatus('success');
       
@@ -113,15 +137,17 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
 
   if (!isOpen) return null;
 
+  const reportTypeLabel = reportType === 'comparison' ? 'Comparison' : 'Analysis';
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Save as Report</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Save {reportTypeLabel} Report</h2>
             <p className="text-sm text-gray-600 mt-1">
-              Save your current workspace for later access
+              Save your current {reportType} workspace for later access
             </p>
           </div>
           <button
@@ -142,25 +168,25 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
                 <span className="text-sm text-gray-700">
-                  <strong>{drugName || 'Unknown Drug'}</strong>
+                  <strong>{effectiveDrugName || 'Unknown Drug'}</strong>
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                 <span className="text-sm text-gray-700">
-                  <strong>{highlights.length}</strong> Highlights
+                  <strong>{effectiveHighlightsCount}</strong> Highlights
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
                 <span className="text-sm text-gray-700">
-                  <strong>{notes.length}</strong> Notes
+                  <strong>{effectiveNotesCount}</strong> Notes
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
                 <span className="text-sm text-gray-700">
-                  <strong>{flaggedChats.length}</strong> Flagged Chats
+                  <strong>{effectiveFlaggedChatsCount}</strong> Flagged Chats
                 </span>
               </div>
             </div>

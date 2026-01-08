@@ -257,16 +257,12 @@ export const NotesModal: React.FC = () => {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Cited Notes Section */}
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-3">
-              Cited Notes ({citedNotes.length})
-            </h3>
-            {citedNotes.length === 0 ? (
-              <p className="text-gray-500 text-sm italic">
-                No cited notes yet. Highlight text in the label to create cited notes.
-              </p>
-            ) : (
+          {/* Cited Notes Section - Show only when highlights exist */}
+          {citedNotes.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                Cited Notes ({citedNotes.length})
+              </h3>
               <div className="space-y-3">
                 {citedNotes.map((note) => {
                   const highlightColor = note.highlightId ? getHighlightColor(note.highlightId) : 'red';
@@ -415,8 +411,8 @@ export const NotesModal: React.FC = () => {
                 );
                 })}
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Uncited Notes Section */}
           <div>

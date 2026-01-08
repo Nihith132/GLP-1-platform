@@ -288,6 +288,13 @@ async def compare_semantic(request: SemanticDiffRequest):
             else:
                 common_loincs = list(set(source_sections.keys()) & set(competitor_sections.keys()))
             
+            # ⭐ FIX 1: Sort by document order (section.order field) instead of LOINC code
+            # This ensures sections appear in sequential order (1, 2, 3...) not random (1, 16, 5...)
+            common_loincs_sorted = sorted(
+                common_loincs, 
+                key=lambda loinc: source_sections[loinc].order if hasattr(source_sections[loinc], 'order') else 0
+            )
+            
             diffs = []
             total_stats = {
                 "high_similarity": 0,
@@ -297,7 +304,7 @@ async def compare_semantic(request: SemanticDiffRequest):
                 "conflicts": 0
             }
             
-            for loinc in sorted(common_loincs):
+            for loinc in common_loincs_sorted:
                 source_section = source_sections[loinc]
                 competitor_section = competitor_sections[loinc]
                 
@@ -348,7 +355,10 @@ async def compare_semantic(request: SemanticDiffRequest):
                 matched_source = set()
                 matched_competitor = set()
                 
-                # Find matches
+                # ⭐ FIX 3: Bidirectional matching to prevent "same claim twice" issue
+                # Step 1: Find best match from source → competitor
+                source_to_comp_matches = {}  # {source_idx: (comp_idx, score)}
+                
                 for i, src_emb in enumerate(source_embeddings):
                     best_match_idx = None
                     best_score = 0.0
@@ -364,21 +374,52 @@ async def compare_semantic(request: SemanticDiffRequest):
                             best_match_idx = j
                     
                     if best_match_idx is not None:
-                        # Matched
-                        matched_source.add(i)
-                        matched_competitor.add(best_match_idx)
+                        source_to_comp_matches[i] = (best_match_idx, best_score)
+                
+                # Step 2: Find best match from competitor → source (reverse direction)
+                comp_to_source_matches = {}  # {comp_idx: (source_idx, score)}
+                
+                for j, comp_emb in enumerate(competitor_embeddings):
+                    best_match_idx = None
+                    best_score = 0.0
+                    
+                    for i, src_emb in enumerate(source_embeddings):
+                        similarity = float(src_emb @ comp_emb / (
+                            (src_emb @ src_emb) ** 0.5 * (comp_emb @ comp_emb) ** 0.5
+                        ))
                         
-                        if best_score >= 0.85:
+                        if similarity > best_score and similarity >= request.similarity_threshold:
+                            best_score = similarity
+                            best_match_idx = i
+                    
+                    if best_match_idx is not None:
+                        comp_to_source_matches[j] = (best_match_idx, best_score)
+                
+                # Step 3: Only accept bidirectional matches (both directions agree)
+                for i, (comp_idx, score) in source_to_comp_matches.items():
+                    # Check if competitor also matched back to this source
+                    if comp_idx in comp_to_source_matches:
+                        reverse_src_idx, reverse_score = comp_to_source_matches[comp_idx]
+                        if reverse_src_idx == i:  # Bidirectional match confirmed!
+                            matched_source.add(i)
+                            matched_competitor.add(comp_idx)
+                            
+                            # Use the average score for more accuracy
+                            avg_score = (score + reverse_score) / 2
+                            # Use the average score for more accuracy
+                            avg_score = (score + reverse_score) / 2
+                        
+                        if avg_score >= 0.85:
                             # High similarity match
                             diff_type = "high_similarity"
                             color = "green"
-                            explanation = f"Both drugs have similar information (similarity: {best_score:.2f})"
+                            explanation = f"Both drugs have similar information (similarity: {avg_score:.2f})"
                             total_stats["high_similarity"] += 1
                         else:
                             # Partial match
                             diff_type = "partial_match"
                             color = "yellow"
-                            explanation = f"Similar but with differences (similarity: {best_score:.2f})"
+                            explanation = f"Similar but with differences (similarity: {avg_score:.2f})"
                             total_stats["partial_matches"] += 1
                         
                         matches.append(SemanticMatch(
@@ -390,13 +431,13 @@ async def compare_semantic(request: SemanticDiffRequest):
                                 diff_type=diff_type
                             ),
                             competitor_segment=SemanticSegment(
-                                text=competitor_sentences[best_match_idx],
+                                text=competitor_sentences[comp_idx],
                                 start_char=0,
-                                end_char=len(competitor_sentences[best_match_idx]),
+                                end_char=len(competitor_sentences[comp_idx]),
                                 highlight_color=color,
                                 diff_type=diff_type
                             ),
-                            similarity_score=best_score,
+                            similarity_score=avg_score,
                             explanation=explanation
                         ))
                 

@@ -38,12 +38,38 @@ export function Reports() {
       // Store report data in sessionStorage for restoration
       sessionStorage.setItem('pendingReportLoad', JSON.stringify(report));
       
-      // Navigate to AnalysisWorkspace with drug ID from workspace_state
-      const drugId = (report as any).workspace_state?.drug_id || (report as any).workspace_state?.drugId;
-      if (drugId) {
-        navigate(`/analysis/${drugId}?loadReport=${reportId}`);
+      // ⭐ Route based on report type
+      if (report.report_type === 'comparison') {
+        // Comparison report: Navigate to comparison workspace
+        const workspaceState = (report as any).workspace_state;
+        const sourceDrugId = workspaceState?.source_drug_id || workspaceState?.sourceDrugId;
+        const competitorIds = workspaceState?.competitor_drug_ids || workspaceState?.competitorDrugIds || [];
+        
+        console.log('🔍 Loading comparison report:', {
+          sourceDrugId,
+          competitorIds,
+          workspaceState
+        });
+        
+        if (sourceDrugId && competitorIds.length > 0) {
+          const competitorsParam = competitorIds.join(',');
+          navigate(`/comparison/${sourceDrugId}/${competitorsParam}?loadReport=${reportId}`);
+        } else {
+          // Better error message
+          const errorDetails = [];
+          if (!sourceDrugId) errorDetails.push('source drug ID missing');
+          if (!competitorIds || competitorIds.length === 0) errorDetails.push('competitor drug IDs missing');
+          
+          alert(`Unable to load comparison report: ${errorDetails.join(', ')}. This report may be from an older version. Please delete it and create a new comparison report.`);
+        }
       } else {
-        alert('Unable to load report: Drug ID not found');
+        // Analysis report: Navigate to analysis workspace (existing logic)
+        const drugId = (report as any).workspace_state?.drug_id || (report as any).workspace_state?.drugId;
+        if (drugId) {
+          navigate(`/analysis/${drugId}?loadReport=${reportId}`);
+        } else {
+          alert('Unable to load report: Drug ID not found');
+        }
       }
     } catch (error) {
       console.error('Failed to load report:', error);
@@ -93,16 +119,34 @@ export function Reports() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {reports.map((report) => {
-            const drugName = (report as any).workspace_state?.drug_name || 'Unknown Drug';
+            const workspaceState = (report as any).workspace_state;
+            
+            // ⭐ Display drug names based on report type
+            let drugDisplayName: string;
+            if (report.report_type === 'comparison') {
+              const sourceName = workspaceState?.source_drug_name || workspaceState?.sourceDrugName || 'Unknown';
+              const competitorNames = workspaceState?.competitor_drug_names || workspaceState?.competitorDrugNames || [];
+              if (competitorNames.length > 0) {
+                drugDisplayName = `${sourceName} vs ${competitorNames.join(', ')}`;
+              } else {
+                drugDisplayName = `${sourceName} (Comparison)`;
+              }
+            } else {
+              drugDisplayName = workspaceState?.drug_name || workspaceState?.drugName || 'Unknown Drug';
+            }
+            
             return (
               <Card key={report.id}>
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <CardTitle className="text-lg">{report.title}</CardTitle>
-                      <p className="text-sm text-muted-foreground mt-1">{drugName}</p>
+                      <p className="text-sm text-muted-foreground mt-1">{drugDisplayName}</p>
                       <div className="flex items-center gap-2 mt-2">
-                        <Badge variant="secondary">{report.report_type}</Badge>
+                        {/* ⭐ Different badge styling for comparison vs analysis */}
+                        <Badge variant={report.report_type === 'comparison' ? 'default' : 'secondary'}>
+                          {report.report_type}
+                        </Badge>
                         <span className="text-xs text-muted-foreground flex items-center gap-1">
                           <Calendar className="h-3 w-3" />
                           {new Date(report.created_at).toLocaleDateString()}

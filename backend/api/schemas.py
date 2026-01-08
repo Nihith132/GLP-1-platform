@@ -280,7 +280,9 @@ class SemanticDiffRequest(BaseModel):
     source_drug_id: int
     competitor_drug_id: int
     section_loinc: Optional[str] = Field(default=None, description="Specific section to compare")
-    similarity_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    # ⭐ FIX 2: Increased from 0.65 to 0.75 to reduce false negatives
+    # Higher threshold = more confident matches, fewer "same claim marked twice" issues
+    similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
 class SemanticSegment(BaseModel):

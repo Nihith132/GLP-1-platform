@@ -1,18 +1,16 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { drugService } from '@/services/drugService';
-import { comparisonService } from '@/services/comparisonService';
 import { useDrugStore } from '@/store/drugStore';
 import { Button } from '../components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Loading } from '../components/ui/Loading';
-import { GitCompare, Plus, X } from 'lucide-react';
-import type { Drug, ComparisonResult } from '@/types';
+import { GitCompare, X } from 'lucide-react';
 
 export function Comparison() {
+  const navigate = useNavigate();
   const { drugs, setDrugs, selectedDrugs, toggleDrugSelection, clearSelectedDrugs } = useDrugStore();
-  const [comparison, setComparison] = useState<ComparisonResult | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [isLoadingDrugs, setIsLoadingDrugs] = useState(true);
 
   useEffect(() => {
@@ -30,21 +28,18 @@ export function Comparison() {
     }
   };
 
-  const handleCompare = async () => {
-    if (selectedDrugs.length !== 2) return;
-
-    try {
-      setIsLoading(true);
-      const result = await comparisonService.compareDrugs(
-        selectedDrugs[0],
-        selectedDrugs[1]
-      );
-      setComparison(result);
-    } catch (err) {
-      console.error('Error comparing drugs:', err);
-    } finally {
-      setIsLoading(false);
+  const handleCompare = () => {
+    if (selectedDrugs.length !== 2) {
+      alert('Please select exactly 2 drugs to compare');
+      return;
     }
+
+    // First drug = Source, Second drug = Competitor
+    const sourceDrugId = selectedDrugs[0];
+    const competitorDrugId = selectedDrugs[1];
+    
+    // Navigate to ComparisonWorkspace
+    navigate(`/comparison/${sourceDrugId}/${competitorDrugId}`);
   };
 
   if (isLoadingDrugs) {
@@ -68,34 +63,37 @@ export function Comparison() {
       <Card>
         <CardHeader>
           <CardTitle>Select Drugs to Compare</CardTitle>
+          <p className="text-sm text-muted-foreground mt-2">
+            Select exactly 2 drugs. The first drug will be the <strong>source</strong>, and the second will be the <strong>competitor</strong>.
+          </p>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             <div className="flex items-center gap-2">
-              <Badge variant={selectedDrugs.length >= 1 ? 'success' : 'secondary'}>
+              <Badge variant={selectedDrugs.length >= 1 ? 'default' : 'secondary'}>
                 {selectedDrugs.length >= 1 ? '✓' : '1'}
               </Badge>
               <span className="text-sm font-medium">
                 {selectedDrugs.length >= 1
-                  ? drugs.find((d) => d.id === selectedDrugs[0])?.name
-                  : 'Select first drug'}
+                  ? `${drugs.find((d) => d.id === selectedDrugs[0])?.name} (Source)`
+                  : 'Select first drug (Source)'}
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant={selectedDrugs.length >= 2 ? 'success' : 'secondary'}>
+              <Badge variant={selectedDrugs.length >= 2 ? 'default' : 'secondary'}>
                 {selectedDrugs.length >= 2 ? '✓' : '2'}
               </Badge>
               <span className="text-sm font-medium">
                 {selectedDrugs.length >= 2
-                  ? drugs.find((d) => d.id === selectedDrugs[1])?.name
-                  : 'Select second drug'}
+                  ? `${drugs.find((d) => d.id === selectedDrugs[1])?.name} (Competitor)`
+                  : 'Select second drug (Competitor)'}
               </span>
             </div>
 
             <div className="flex gap-2">
               <Button
                 onClick={handleCompare}
-                disabled={selectedDrugs.length !== 2 || isLoading}
+                disabled={selectedDrugs.length !== 2}
               >
                 <GitCompare className="h-4 w-4 mr-2" />
                 Compare
@@ -115,103 +113,46 @@ export function Comparison() {
 
       {/* Drug List */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {drugs.map((drug) => (
-          <Card
-            key={drug.id}
-            className={`cursor-pointer transition-all hover:shadow-md ${
-              selectedDrugs.includes(drug.id) ? 'ring-2 ring-primary' : ''
-            }`}
-            onClick={() => {
-              if (selectedDrugs.length < 2 || selectedDrugs.includes(drug.id)) {
-                toggleDrugSelection(drug.id);
-              }
-            }}
-          >
-            <CardHeader>
-              <CardTitle className="text-lg">{drug.name}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-sm text-muted-foreground">
-                <div>Version: {drug.version}</div>
-                <div>
-                  Last Updated:{' '}
-                  {new Date(drug.last_updated).toLocaleDateString()}
+        {drugs.map((drug) => {
+          const selectionIndex = selectedDrugs.indexOf(drug.id);
+          const isSelected = selectionIndex !== -1;
+          const selectionLabel = selectionIndex === 0 ? 'Source' : selectionIndex === 1 ? 'Competitor' : '';
+          
+          return (
+            <Card
+              key={drug.id}
+              className={`cursor-pointer transition-all hover:shadow-md ${
+                isSelected ? 'ring-2 ring-primary' : ''
+              }`}
+              onClick={() => {
+                if (selectedDrugs.length < 2 || isSelected) {
+                  toggleDrugSelection(drug.id);
+                }
+              }}
+            >
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg">{drug.name}</CardTitle>
+                  {isSelected && (
+                    <Badge variant="default" className="ml-2">
+                      {selectionLabel}
+                    </Badge>
+                  )}
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm text-muted-foreground">
+                  <div>Version: {drug.version}</div>
+                  <div>
+                    Last Updated:{' '}
+                    {new Date(drug.last_updated).toLocaleDateString()}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
-
-      {/* Comparison Results */}
-      {isLoading && (
-        <div className="flex items-center justify-center py-12">
-          <Loading size="lg" text="Comparing drugs..." />
-        </div>
-      )}
-
-      {comparison && !isLoading && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Comparison Results</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-lg font-semibold">
-                  {comparison.drug1_name} vs {comparison.drug2_name}
-                </span>
-                <Badge variant="secondary">
-                  Similarity: {(comparison.similarity_score * 100).toFixed(1)}%
-                </Badge>
-              </div>
-
-              <div className="space-y-4">
-                {comparison.differences.map((diff, idx) => (
-                  <Card key={idx} className="bg-muted/50">
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-base">{diff.section_name}</CardTitle>
-                        <Badge
-                          variant={
-                            diff.diff_type === 'unchanged'
-                              ? 'secondary'
-                              : diff.diff_type === 'modified'
-                              ? 'warning'
-                              : 'default'
-                          }
-                        >
-                          {diff.diff_type}
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <div className="text-sm font-medium mb-2">
-                            {comparison.drug1_name}
-                          </div>
-                          <div className="text-sm text-muted-foreground whitespace-pre-wrap">
-                            {diff.drug1_content.substring(0, 200)}...
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium mb-2">
-                            {comparison.drug2_name}
-                          </div>
-                          <div className="text-sm text-muted-foreground whitespace-pre-wrap">
-                            {diff.drug2_content.substring(0, 200)}...
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

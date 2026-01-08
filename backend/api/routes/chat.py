@@ -387,7 +387,7 @@ async def chat_compare(request: ChatRequest):
                     FROM section_embeddings se
                     JOIN drug_sections ds ON se.section_id = ds.id
                     JOIN drug_labels dl ON ds.drug_label_id = dl.id
-                    WHERE dl.id IN :drug_ids
+                    WHERE dl.id = ANY(:drug_ids)
                     ORDER BY dl.id, se.embedding <=> :query_vector
                     LIMIT :limit_per_drug
                 """)
@@ -396,7 +396,7 @@ async def chat_compare(request: ChatRequest):
                     sql_query,
                     {
                         "query_vector": query_vector,
-                        "drug_ids": tuple(request.drug_ids),
+                        "drug_ids": request.drug_ids,  # Pass as list, not tuple
                         "limit_per_drug": len(request.drug_ids) * 3  # 3 sections per drug
                     }
                 )
