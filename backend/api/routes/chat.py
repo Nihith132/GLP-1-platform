@@ -371,28 +371,59 @@ async def chat_compare(request: ChatRequest):
             query_vector = str(query_embedding.tolist())
             
             # Retrieve from multiple drugs
-            sql_query = text("""
-                SELECT DISTINCT ON (dl.id)
-                    se.section_id,
-                    se.drug_name,
-                    se.section_loinc,
-                    se.chunk_text,
-                    ds.title as section_title,
-                    dl.id as drug_id,
-                    dl.generic_name,
-                    1 - (se.embedding <=> :query_vector) as similarity_score
-                FROM section_embeddings se
-                JOIN drug_sections ds ON se.section_id = ds.id
-                JOIN drug_labels dl ON ds.drug_label_id = dl.id
-                WHERE dl.is_current_version = true
-                ORDER BY dl.id, se.embedding <=> :query_vector
-                LIMIT 10
-            """)
-            
-            result = await session.execute(
-                sql_query,
-                {"query_vector": query_vector}
-            )
+            # Filter by drug_ids if provided to compare only selected drugs
+            if request.drug_ids and len(request.drug_ids) > 0:
+                # Get top sections from each selected drug (3 per drug)
+                sql_query = text("""
+                    SELECT 
+                        se.section_id,
+                        se.drug_name,
+                        se.section_loinc,
+                        se.chunk_text,
+                        ds.title as section_title,
+                        dl.id as drug_id,
+                        dl.generic_name,
+                        1 - (se.embedding <=> :query_vector) as similarity_score
+                    FROM section_embeddings se
+                    JOIN drug_sections ds ON se.section_id = ds.id
+                    JOIN drug_labels dl ON ds.drug_label_id = dl.id
+                    WHERE dl.id IN :drug_ids
+                    ORDER BY dl.id, se.embedding <=> :query_vector
+                    LIMIT :limit_per_drug
+                """)
+                
+                result = await session.execute(
+                    sql_query,
+                    {
+                        "query_vector": query_vector,
+                        "drug_ids": tuple(request.drug_ids),
+                        "limit_per_drug": len(request.drug_ids) * 3  # 3 sections per drug
+                    }
+                )
+            else:
+                # Fallback to all current versions if no drug_ids specified
+                sql_query = text("""
+                    SELECT DISTINCT ON (dl.id)
+                        se.section_id,
+                        se.drug_name,
+                        se.section_loinc,
+                        se.chunk_text,
+                        ds.title as section_title,
+                        dl.id as drug_id,
+                        dl.generic_name,
+                        1 - (se.embedding <=> :query_vector) as similarity_score
+                    FROM section_embeddings se
+                    JOIN drug_sections ds ON se.section_id = ds.id
+                    JOIN drug_labels dl ON ds.drug_label_id = dl.id
+                    WHERE dl.is_current_version = true
+                    ORDER BY dl.id, se.embedding <=> :query_vector
+                    LIMIT 10
+                """)
+                
+                result = await session.execute(
+                    sql_query,
+                    {"query_vector": query_vector}
+                )
             
             rows = result.fetchall()
             

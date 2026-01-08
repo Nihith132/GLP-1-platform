@@ -135,6 +135,7 @@ class ChatRequest(BaseModel):
     """Chat request with conversation history"""
     message: str = Field(..., min_length=1, max_length=1000)
     drug_id: Optional[int] = Field(default=None, description="Optional drug context")
+    drug_ids: Optional[List[int]] = Field(default=None, description="Optional list of drug IDs to compare")
     conversation_history: Optional[List[ChatMessage]] = Field(default=None, max_length=20)
 
 

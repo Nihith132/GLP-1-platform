@@ -1,14 +1,24 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { comparisonService } from '@/services/comparisonService';
+import { chatService } from '@/services/chatService';
 import { Loading } from '../components/ui/Loading';
 import { Button } from '../components/ui/Button';
-import { Badge } from '../components/ui/Badge';
+import { formatAIText } from '@/utils/formatText';
 import { 
   ArrowLeft, 
   Printer,
+  MessageSquare,
+  Loader2,
+  X,
+  Send,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Lightbulb,
   BarChart3,
-  RefreshCw
+  ExternalLink,
+  ArrowLeftRight
 } from 'lucide-react';
 import './ComparisonWorkspace.css';
 
@@ -35,27 +45,11 @@ interface DrugWithSections {
   sections: DrugSection[];
 }
 
-interface TextChange {
-  change_type: 'addition' | 'deletion';
-  text: string;
-  start_char: number;
-  end_char: number;
-}
-
-interface LexicalDiffResult {
-  section_loinc: string;
-  section_title: string;
-  source_text: string;
-  competitor_text: string;
-  additions: TextChange[];
-  deletions: TextChange[];
-}
-
 interface SemanticSegment {
   text: string;
   start_char: number;
   end_char: number;
-  highlight_color: 'green' | 'yellow' | 'red' | 'blue';
+  highlight_color: 'green' | 'yellow' | 'red' | 'blue' | 'white';
   underline_style?: 'wavy';
   diff_type: 'high_similarity' | 'partial_match' | 'unique_to_source' | 'omission' | 'conflict';
 }
@@ -82,48 +76,121 @@ interface SemanticDiffSummary {
   conflicts: number;
 }
 
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: Array<{
+    section_name: string;
+    drug_name: string;
+  }>;
+}
+
+interface ExplanationModal {
+  show: boolean;
+  sourceText: string;
+  competitorText: string;
+  sectionLoinc: string;
+  explanation?: {
+    explanation: string;
+    clinical_significance: string;
+    marketing_implication: string;
+    action_items: string[];
+  };
+}
+
+interface ExecutiveSummary {
+  executive_summary: string;
+  category_summaries: Array<{
+    category: string;
+    advantages: string[];
+    gaps: string[];
+    conflicts: string[];
+  }>;
+  overall_statistics: SemanticDiffSummary;
+}
+
 export function ComparisonWorkspace() {
   const { sourceId, competitorId } = useParams<{ sourceId: string; competitorId: string }>();
   const navigate = useNavigate();
   
   const [sourceDrug, setSourceDrug] = useState<DrugWithSections | null>(null);
   const [competitorDrug, setCompetitorDrug] = useState<DrugWithSections | null>(null);
-  const [mode, setMode] = useState<'lexical' | 'semantic'>('lexical');
+  const [allCompetitors, setAllCompetitors] = useState<DrugWithSections[]>([]);
+  const [selectedCompetitorIndex, setSelectedCompetitorIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const [showAnalytics, setShowAnalytics] = useState(false);
   
-  const [lexicalDiff, setLexicalDiff] = useState<LexicalDiffResult[]>([]);
   const [semanticDiff, setSemanticDiff] = useState<SemanticDiffResult[]>([]);
   const [semanticSummary, setSemanticSummary] = useState<SemanticDiffSummary | null>(null);
+  const [isLoadingDiff, setIsLoadingDiff] = useState(false);
+  
+  // UI state
+  const [showDifferencesPanel, setShowDifferencesPanel] = useState(false);
+  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
+  
+  // Chat state
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  
+  // Explanation modal state
+  const [explanationModal, setExplanationModal] = useState<ExplanationModal>({
+    show: false,
+    sourceText: '',
+    competitorText: '',
+    sectionLoinc: ''
+  });
+  const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
+  
+  // Summary modal state
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [executiveSummary, setExecutiveSummary] = useState<ExecutiveSummary | null>(null);
+  const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   
   const sectionRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
-  const contentRef = useRef<HTMLDivElement>(null);
+  const sourceScrollRef = useRef<HTMLDivElement>(null);
+  const competitorScrollRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (sourceId && competitorId) {
-      loadComparisonData(parseInt(sourceId), parseInt(competitorId));
+      const competitorIds = competitorId.split(',').map(id => parseInt(id.trim()));
+      loadComparisonData(parseInt(sourceId), competitorIds);
     }
   }, [sourceId, competitorId]);
 
+  // Auto-scroll chat to bottom
   useEffect(() => {
-    // Load diff data when mode changes
-    if (sourceDrug && competitorDrug) {
-      if (mode === 'lexical' && lexicalDiff.length === 0) {
-        loadLexicalDiff();
-      } else if (mode === 'semantic' && semanticDiff.length === 0) {
-        loadSemanticDiff();
-      }
+    if (isChatOpen && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [mode, sourceDrug, competitorDrug]);
+  }, [chatMessages, isChatOpen]);
 
-  const loadComparisonData = async (source: number, competitor: number) => {
+  const handleSwapDrugs = () => {
+    // Cycle through competitors, keeping source fixed
+    if (!allCompetitors || allCompetitors.length <= 1) return;
+    
+    const nextIndex = (selectedCompetitorIndex + 1) % allCompetitors.length;
+    setSelectedCompetitorIndex(nextIndex);
+    setCompetitorDrug(allCompetitors[nextIndex]);
+    
+    // Clear diffs and summary for new competitor
+    setSemanticDiff([]);
+    setSemanticSummary(null);
+    setShowDifferencesPanel(false);
+    setExecutiveSummary(null);
+  };
+
+  const loadComparisonData = async (source: number, competitors: number[]) => {
     try {
       setIsLoading(true);
-      const data = await comparisonService.loadComparison(source, [competitor]);
+      const data = await comparisonService.loadComparison(source, competitors);
       
       setSourceDrug(data.source_drug);
+      setAllCompetitors(data.competitors);
       setCompetitorDrug(data.competitors[0]);
+      setSelectedCompetitorIndex(0);
       
       // Set first common section as active
       const sourceLoincs = data.source_drug.sections.map(s => s.loinc_code);
@@ -143,134 +210,196 @@ export function ComparisonWorkspace() {
     }
   };
 
-  const loadLexicalDiff = async () => {
-    if (!sourceId || !competitorId) return;
-    
-    try {
-      const result = await comparisonService.getLexicalDiff(
-        parseInt(sourceId),
-        parseInt(competitorId)
-      );
-      setLexicalDiff(result.diffs);
-    } catch (err) {
-      console.error('Error loading lexical diff:', err);
-    }
-  };
-
   const loadSemanticDiff = async () => {
     if (!sourceId || !competitorId) return;
     
     try {
+      setIsLoadingDiff(true);
       const result = await comparisonService.getSemanticDiff(
         parseInt(sourceId),
         parseInt(competitorId)
       );
       setSemanticDiff(result.diffs);
       setSemanticSummary(result.summary);
+      setShowDifferencesPanel(true);
     } catch (err) {
       console.error('Error loading semantic diff:', err);
+    } finally {
+      setIsLoadingDiff(false);
+    }
+  };
+
+  const loadExecutiveSummary = async () => {
+    if (!sourceId || !competitorId) return;
+    
+    setIsLoadingSummary(true);
+    setShowSummaryModal(false);
+    
+    try {
+      const summary = await comparisonService.getDiffSummary(
+        parseInt(sourceId),
+        parseInt(competitorId)
+      );
+      setExecutiveSummary(summary);
+      setShowSummaryModal(true);
+    } catch (err) {
+      console.error('Error loading executive summary:', err);
+    } finally {
+      setIsLoadingSummary(false);
     }
   };
 
   const scrollToSection = (sectionTitle: string) => {
     setActiveSection(sectionTitle);
-    const ref = sectionRefs.current[sectionTitle];
-    if (ref) {
-      ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  };
-
-  const toggleMode = () => {
-    setMode(prev => prev === 'lexical' ? 'semantic' : 'lexical');
-  };
-
-  const renderTextWithLexicalHighlights = (
-    text: string,
-    changes: TextChange[],
-    type: 'source' | 'competitor'
-  ) => {
-    if (changes.length === 0) {
-      return <div className="whitespace-pre-wrap">{text}</div>;
-    }
-
-    // Sort changes by position
-    const sortedChanges = [...changes].sort((a, b) => a.start_char - b.start_char);
     
-    const segments: JSX.Element[] = [];
-    let lastIndex = 0;
-
-    sortedChanges.forEach((change, idx) => {
-      // Add text before this change
-      if (change.start_char > lastIndex) {
-        segments.push(
-          <span key={`text-${idx}`}>
-            {text.substring(lastIndex, change.start_char)}
-          </span>
-        );
-      }
-
-      // Add highlighted change
-      const className = change.change_type === 'deletion' 
-        ? 'lexical-deletion' 
-        : 'lexical-addition';
+    // Scroll both papers to the same section
+    const sourceRef = sectionRefs.current[`source-${sectionTitle}`];
+    const competitorRef = sectionRefs.current[`competitor-${sectionTitle}`];
+    
+    if (sourceRef && sourceScrollRef.current) {
+      // Get the element's position relative to the scrollable container
+      const containerRect = sourceScrollRef.current.getBoundingClientRect();
+      const elementRect = sourceRef.getBoundingClientRect();
+      const scrollTop = sourceScrollRef.current.scrollTop;
+      const targetScrollTop = scrollTop + (elementRect.top - containerRect.top) - 10;
       
-      segments.push(
-        <span key={`change-${idx}`} className={className}>
-          {change.text}
-        </span>
-      );
-
-      lastIndex = change.end_char;
-    });
-
-    // Add remaining text
-    if (lastIndex < text.length) {
-      segments.push(
-        <span key="text-end">
-          {text.substring(lastIndex)}
-        </span>
-      );
+      sourceScrollRef.current.scrollTo({
+        top: targetScrollTop,
+        behavior: 'smooth'
+      });
     }
-
-    return <div className="whitespace-pre-wrap">{segments}</div>;
+    
+    if (competitorRef && competitorScrollRef.current) {
+      // Get the element's position relative to the scrollable container
+      const containerRect = competitorScrollRef.current.getBoundingClientRect();
+      const elementRect = competitorRef.getBoundingClientRect();
+      const scrollTop = competitorScrollRef.current.scrollTop;
+      const targetScrollTop = scrollTop + (elementRect.top - containerRect.top) - 10;
+      
+      competitorScrollRef.current.scrollTo({
+        top: targetScrollTop,
+        behavior: 'smooth'
+      });
+    }
   };
 
-  const renderSemanticSegments = (
-    matches: SemanticMatch[],
-    drugType: 'source' | 'competitor'
-  ) => {
-    const segments = matches
-      .map(match => drugType === 'source' ? match.source_segment : match.competitor_segment)
-      .filter((seg): seg is SemanticSegment => seg !== null);
+  const handleCompetitorChange = async (index: number) => {
+    setSelectedCompetitorIndex(index);
+    setCompetitorDrug(allCompetitors[index]);
+    
+    // Clear diffs for new competitor
+    setSemanticDiff([]);
+    setSemanticSummary(null);
+    setShowDifferencesPanel(false);
+  };
 
-    if (segments.length === 0) {
-      return null;
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || !sourceDrug || !competitorDrug) return;
+
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: chatInput
+    };
+
+    setChatMessages(prev => [...prev, userMessage]);
+    const currentInput = chatInput;
+    setChatInput('');
+    setIsSendingMessage(true);
+
+    try {
+      // Pass drug IDs to ensure comparison only uses selected drugs
+      const response = await chatService.compare({
+        message: `Comparing ${sourceDrug.name} vs ${competitorDrug.name}: ${currentInput}`,
+        drug_ids: [sourceDrug.id, competitorDrug.id]
+      });
+
+      const assistantMessage: ChatMessage = {
+        role: 'assistant',
+        content: response.answer,
+        citations: response.citations,
+      };
+
+      setChatMessages(prev => [...prev, assistantMessage]);
+      
+      // Scroll to bottom
+      setTimeout(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    } catch (err) {
+      console.error('Error sending message:', err);
+      const errorMessage: ChatMessage = {
+        role: 'assistant',
+        content: 'Sorry, I encountered an error processing your question. Please try again.'
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsSendingMessage(false);
     }
+  };
 
-    return (
-      <div className="space-y-2">
-        {segments.map((segment, idx) => {
-          const className = `semantic-segment semantic-${segment.highlight_color} ${
-            segment.underline_style ? 'semantic-underline-wavy' : ''
-          }`;
-          
-          const match = matches.find(m => 
-            (drugType === 'source' && m.source_segment === segment) ||
-            (drugType === 'competitor' && m.competitor_segment === segment)
-          );
+  const handleExplainSegment = async (sourceText: string, competitorText: string, sectionLoinc: string) => {
+    setExplanationModal({
+      show: true,
+      sourceText,
+      competitorText,
+      sectionLoinc,
+      explanation: undefined
+    });
+    
+    setIsLoadingExplanation(true);
+    
+    try {
+      const explanation = await comparisonService.explainSegment(
+        parseInt(sourceId!),
+        parseInt(competitorId!),
+        sectionLoinc,
+        sourceText,
+        competitorText
+      );
+      
+      setExplanationModal(prev => ({
+        ...prev,
+        explanation
+      }));
+    } catch (err) {
+      console.error('Error loading explanation:', err);
+    } finally {
+      setIsLoadingExplanation(false);
+    }
+  };
 
-          return (
-            <div
-              key={idx}
-              className={className}
-              title={match?.explanation}
-            >
-              {segment.text}
-            </div>
-          );
-        })}
-      </div>
-    );
+  const getDiffTypeColor = (diffType: string): string => {
+    switch (diffType) {
+      case 'high_similarity':
+        return 'bg-green-100 text-green-800';
+      case 'unique_to_source':
+        return 'bg-green-100 text-green-800';
+      case 'partial_match':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'conflict':
+        return 'bg-red-100 text-red-800';
+      case 'omission':
+        return 'bg-blue-100 text-blue-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getDiffTypeLabel = (diffType: string): string => {
+    switch (diffType) {
+      case 'high_similarity':
+        return 'High Similarity';
+      case 'unique_to_source':
+        return 'Unique Advantage';
+      case 'partial_match':
+        return 'Partial Match';
+      case 'conflict':
+        return 'Conflict';
+      case 'omission':
+        return 'Omission/Gap';
+      default:
+        return 'Match';
+    }
   };
 
   if (isLoading) {
@@ -295,8 +424,7 @@ export function ComparisonWorkspace() {
     );
   }
 
-  // Get common sections (hide if missing from either drug)
-  const sourceLoincs = new Set(sourceDrug.sections.map(s => s.loinc_code));
+  // Get common sections
   const competitorLoincs = new Set(competitorDrug.sections.map(s => s.loinc_code));
   const commonLoincs = sourceDrug.sections
     .map(s => s.loinc_code)
@@ -305,7 +433,7 @@ export function ComparisonWorkspace() {
   const commonSections = sourceDrug.sections.filter(s => commonLoincs.includes(s.loinc_code));
 
   return (
-    <div className="comparison-workspace h-screen flex flex-col">
+    <div className="comparison-workspace h-screen flex flex-col bg-[#525659]">
       {/* Header */}
       <header className="comparison-header no-print bg-white border-b border-border px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -320,32 +448,77 @@ export function ComparisonWorkspace() {
           <div className="text-lg font-semibold">
             <span className="text-primary">{sourceDrug.name}</span>
             <span className="text-muted-foreground mx-2">vs</span>
-            <span className="text-secondary">{competitorDrug.name}</span>
+            <span className="text-orange-600 dark:text-orange-400">{competitorDrug.name}</span>
           </div>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          {/* Mode Toggle */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={toggleMode}
-          >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            {mode === 'lexical' ? 'Switch to Semantic' : 'Switch to Lexical'}
-          </Button>
           
-          {/* Analytics Button */}
-          {mode === 'semantic' && semanticSummary && (
+          {/* Swap Button - Only show if multiple competitors */}
+          {allCompetitors.length > 1 && (
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setShowAnalytics(!showAnalytics)}
+              onClick={handleSwapDrugs}
+              className="ml-2"
+              title="Cycle through competitors"
             >
-              <BarChart3 className="h-4 w-4 mr-2" />
-              Analytics
+              <ArrowLeftRight className="h-4 w-4" />
             </Button>
           )}
+          
+          {/* Competitor Selector */}
+          {allCompetitors.length > 1 && (
+            <div className="relative">
+              <select
+                value={selectedCompetitorIndex}
+                onChange={(e) => handleCompetitorChange(parseInt(e.target.value))}
+                className="px-3 py-1.5 pr-8 text-sm border border-border rounded-lg bg-background appearance-none cursor-pointer hover:bg-accent"
+              >
+                {allCompetitors.map((comp, idx) => (
+                  <option key={comp.id} value={idx}>
+                    Competitor {idx + 1}: {comp.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none" />
+            </div>
+          )}
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {/* View Differences Button */}
+          <Button
+            variant="default"
+            size="sm"
+            onClick={loadSemanticDiff}
+            disabled={isLoadingDiff}
+          >
+            <FileText className="h-4 w-4 mr-2" />
+            {isLoadingDiff ? 'Loading...' : 'View Semantic Differences'}
+          </Button>
+          
+          {/* Generate Summary Button */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadExecutiveSummary}
+            disabled={isLoadingSummary}
+          >
+            {isLoadingSummary ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <BarChart3 className="h-4 w-4 mr-2" />
+            )}
+            {isLoadingSummary ? 'Generating...' : 'Generate Summary'}
+          </Button>
+          
+          {/* Chat Button */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsChatOpen(!isChatOpen)}
+          >
+            <MessageSquare className="h-4 w-4 mr-2" />
+            Ask AI
+          </Button>
           
           {/* Print Button */}
           <Button
@@ -359,209 +532,624 @@ export function ComparisonWorkspace() {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar - Section Navigation */}
-        <aside className="sidebar no-print w-72 bg-card border-r border-border overflow-y-auto">
-          <div className="p-4">
-            <h3 className="text-sm font-semibold text-muted-foreground mb-3">
-              SECTIONS ({commonSections.length})
-            </h3>
-            <nav className="space-y-1">
-              {commonSections.map((section) => {
-                const isActive = activeSection === section.title;
-                
-                return (
-                  <button
-                    key={section.loinc_code}
-                    onClick={() => scrollToSection(section.title)}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                      isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-muted'
-                    }`}
-                  >
-                    {section.title}
-                  </button>
-                );
-              })}
-            </nav>
+        {/* Collapsible Navigation Sidebar */}
+        <aside className={`no-print bg-white border-r border-border transition-all duration-300 ${isNavCollapsed ? 'w-12' : 'w-64'} flex flex-col`}>
+          {/* Collapse Toggle */}
+          <div className="p-2 border-b border-border flex justify-end">
+            <button
+              onClick={() => setIsNavCollapsed(!isNavCollapsed)}
+              className="p-1 hover:bg-gray-100 rounded"
+            >
+              {isNavCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronDown className="h-5 w-5 rotate-90" />}
+            </button>
           </div>
+          
+          {!isNavCollapsed && (
+            <nav className="flex-1 overflow-y-auto p-4">
+              <h3 className="text-sm font-semibold mb-3 text-muted-foreground">Common Sections</h3>
+              <ul className="space-y-1">
+                {commonSections.map((section) => (
+                  <li key={section.loinc_code}>
+                    <button
+                      onClick={() => scrollToSection(section.title)}
+                      className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors ${
+                        activeSection === section.title
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-accent'
+                      }`}
+                    >
+                      {section.title}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          )}
         </aside>
 
-        {/* Center Content - Two Papers Side by Side */}
-        <div 
-          ref={contentRef}
-          className="comparison-content flex-1 overflow-y-auto"
-        >
-          <div className="comparison-grid">
-            {/* Source Drug Paper */}
-            <div className="paper-container source-paper">
-              <div className="paper-sheet">
-                {/* Drug Header */}
-                <div className="drug-header source-header">
-                  <h1 className="drug-name">{sourceDrug.name}</h1>
-                  <div className="drug-meta">
-                    <p><strong>Generic Name:</strong> {sourceDrug.generic_name}</p>
-                    <p><strong>Manufacturer:</strong> {sourceDrug.manufacturer}</p>
-                    <p><strong>Version:</strong> {sourceDrug.version}</p>
-                  </div>
-                </div>
-
-                {/* Sections */}
-                <div className="drug-label-content">
-                  {commonSections.map((section) => {
-                    const diffData = mode === 'lexical'
-                      ? lexicalDiff.find(d => d.section_loinc === section.loinc_code)
-                      : semanticDiff.find(d => d.section_loinc === section.loinc_code);
-
-                    return (
-                      <div
-                        key={section.loinc_code}
-                        ref={(el) => {
-                          sectionRefs.current[section.title] = el;
-                        }}
-                        data-section-title={section.title}
-                        className="section"
-                      >
-                        <h2 className="section-title">{section.title}</h2>
-                        
-                        <div className="section-content">
-                          {mode === 'lexical' && diffData && 'deletions' in diffData ? (
-                            renderTextWithLexicalHighlights(
-                              diffData.source_text,
-                              diffData.deletions,
-                              'source'
-                            )
-                          ) : mode === 'semantic' && diffData && 'matches' in diffData ? (
-                            renderSemanticSegments(diffData.matches, 'source')
-                          ) : (
-                            <div className="whitespace-pre-wrap">{section.content}</div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+        {/* Papers Container */}
+        <div className="flex-1 flex gap-2 p-2 overflow-hidden justify-center">
+          {/* Source Drug Paper */}
+          <div ref={sourceScrollRef} className="flex-1 overflow-y-auto">
+            <div className="paper-sheet">
+              {/* Drug Header */}
+              <div className="drug-header source-header">
+                <h1 className="drug-name" style={{ fontSize: '11pt' }}>{sourceDrug.name}</h1>
+                <div className="drug-meta" style={{ fontSize: '11pt' }}>
+                  <p><strong>Generic Name:</strong> {sourceDrug.generic_name}</p>
+                  <p><strong>Manufacturer:</strong> {sourceDrug.manufacturer}</p>
+                  <p><strong>Version:</strong> {sourceDrug.version}</p>
                 </div>
               </div>
-            </div>
 
-            {/* Competitor Drug Paper */}
-            <div className="paper-container competitor-paper">
-              <div className="paper-sheet">
-                {/* Drug Header */}
-                <div className="drug-header competitor-header">
-                  <h1 className="drug-name">{competitorDrug.name}</h1>
-                  <div className="drug-meta">
-                    <p><strong>Generic Name:</strong> {competitorDrug.generic_name}</p>
-                    <p><strong>Manufacturer:</strong> {competitorDrug.manufacturer}</p>
-                    <p><strong>Version:</strong> {competitorDrug.version}</p>
+              {/* Sections */}
+              <div className="drug-label-content">
+                {sourceDrug.sections.map((section) => (
+                  <div
+                    key={section.loinc_code}
+                    ref={(el) => {
+                      sectionRefs.current[`source-${section.title}`] = el;
+                    }}
+                    className="section"
+                  >
+                    <h2 className="section-title" style={{ fontSize: '2.8pt' }}>{section.title}</h2>
+                    <div 
+                      className="section-content"
+                      style={{ fontSize: '3.5pt' }}
+                      dangerouslySetInnerHTML={{ __html: section.content_html || section.content }}
+                    />
                   </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Competitor Drug Paper */}
+          <div ref={competitorScrollRef} className="flex-1 overflow-y-auto">
+            <div className="paper-sheet">
+              {/* Drug Header */}
+              <div className="drug-header competitor-header">
+                <h1 className="drug-name" style={{ fontSize: '11pt' }}>{competitorDrug.name}</h1>
+                <div className="drug-meta" style={{ fontSize: '11pt' }}>
+                  <p><strong>Generic Name:</strong> {competitorDrug.generic_name}</p>
+                  <p><strong>Manufacturer:</strong> {competitorDrug.manufacturer}</p>
+                  <p><strong>Version:</strong> {competitorDrug.version}</p>
                 </div>
+              </div>
 
-                {/* Sections */}
-                <div className="drug-label-content">
-                  {commonSections.map((sourceSection) => {
-                    const competitorSection = competitorDrug.sections.find(
-                      s => s.loinc_code === sourceSection.loinc_code
-                    );
-                    
-                    if (!competitorSection) return null;
-
-                    const diffData = mode === 'lexical'
-                      ? lexicalDiff.find(d => d.section_loinc === sourceSection.loinc_code)
-                      : semanticDiff.find(d => d.section_loinc === sourceSection.loinc_code);
-
-                    return (
-                      <div
-                        key={sourceSection.loinc_code}
-                        className="section"
-                      >
-                        <h2 className="section-title">{competitorSection.title}</h2>
-                        
-                        <div className="section-content">
-                          {mode === 'lexical' && diffData && 'additions' in diffData ? (
-                            renderTextWithLexicalHighlights(
-                              diffData.competitor_text,
-                              diffData.additions,
-                              'competitor'
-                            )
-                          ) : mode === 'semantic' && diffData && 'matches' in diffData ? (
-                            renderSemanticSegments(diffData.matches, 'competitor')
-                          ) : (
-                            <div className="whitespace-pre-wrap">{competitorSection.content}</div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+              {/* Sections */}
+              <div className="drug-label-content">
+                {competitorDrug.sections.map((section) => (
+                  <div
+                    key={section.loinc_code}
+                    ref={(el) => {
+                      sectionRefs.current[`competitor-${section.title}`] = el;
+                    }}
+                    className="section"
+                  >
+                    <h2 className="section-title" style={{ fontSize: '2.8pt' }}>{section.title}
+                    </h2>
+                    <div 
+                      className="section-content"
+                      style={{ fontSize: '3.5pt' }}
+                      dangerouslySetInnerHTML={{ __html: section.content_html || section.content }}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Analytics Modal */}
-      {showAnalytics && semanticSummary && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-40 no-print"
-            onClick={() => setShowAnalytics(false)}
-          />
-          <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 bg-white rounded-lg shadow-2xl w-[600px] max-h-[80vh] overflow-y-auto no-print">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-bold">Semantic Diff Analytics</h2>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowAnalytics(false)}
-                >
-                  ×
-                </Button>
-              </div>
+      {/* Loading Overlay for Semantic Diff */}
+      {isLoadingDiff && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 max-w-md">
+            <Loading size="lg" text="Analyzing semantic differences..." />
+            <p className="text-sm text-muted-foreground text-center mt-4">
+              This may take a few moments as we perform deep AI-powered comparison
+            </p>
+          </div>
+        </div>
+      )}
 
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 bg-green-50 rounded-lg">
-                    <div className="text-2xl font-bold text-green-700">
-                      {semanticSummary.unique_to_source}
-                    </div>
-                    <div className="text-sm text-green-600">Competitive Advantages</div>
+      {/* Loading Overlay for Executive Summary */}
+      {isLoadingSummary && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 max-w-md">
+            <Loading size="lg" text="Generating executive summary..." />
+            <p className="text-sm text-muted-foreground text-center mt-4">
+              Please wait while we analyze and summarize the comparison
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Differences Panel Modal */}
+      {showDifferencesPanel && semanticDiff.length > 0 && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-6 border-b border-border">
+              <h2 className="text-2xl font-bold">Differences</h2>
+              <button
+                onClick={() => setShowDifferencesPanel(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {semanticDiff.map((diffSection) => (
+                <div key={diffSection.section_loinc} className="mb-8">
+                  <div className="flex items-center justify-between mb-4 pb-2 border-b">
+                    <h3 className="text-lg font-semibold text-primary">{diffSection.section_title}</h3>
+                    <button
+                      onClick={() => scrollToSection(diffSection.section_title)}
+                      className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 px-2 py-1 hover:bg-blue-50 rounded"
+                      title="Jump to section in document"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      View in Document
+                    </button>
                   </div>
-                  
-                  <div className="p-4 bg-blue-50 rounded-lg">
-                    <div className="text-2xl font-bold text-blue-700">
-                      {semanticSummary.omissions}
-                    </div>
-                    <div className="text-sm text-blue-600">Gaps to Address</div>
-                  </div>
-                  
-                  <div className="p-4 bg-green-100 rounded-lg">
-                    <div className="text-2xl font-bold text-green-800">
-                      {semanticSummary.high_similarity}
-                    </div>
-                    <div className="text-sm text-green-700">High Similarity</div>
-                  </div>
-                  
-                  <div className="p-4 bg-yellow-50 rounded-lg">
-                    <div className="text-2xl font-bold text-yellow-700">
-                      {semanticSummary.partial_matches}
-                    </div>
-                    <div className="text-sm text-yellow-600">Partial Matches</div>
+
+                  <div className="space-y-4">
+                    {diffSection.matches.map((match, idx) => {
+                      const sourceSegment = match.source_segment;
+                      const competitorSegment = match.competitor_segment;
+                      const diffType = sourceSegment?.diff_type || competitorSegment?.diff_type || 'neutral';
+
+                      return (
+                        <div
+                          key={idx}
+                          className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
+                          onClick={() => {
+                            const sourceText = sourceSegment?.text || '';
+                            const competitorText = competitorSegment?.text || '';
+                            handleExplainSegment(sourceText, competitorText, diffSection.section_loinc);
+                          }}
+                        >
+                          <div className="grid grid-cols-2 divide-x divide-gray-200">
+                            {/* Source Column */}
+                            <div className="p-4">
+                              <div className="text-sm font-semibold text-gray-600 mb-2">{sourceDrug.name}</div>
+                              {sourceSegment ? (
+                                <div className={`p-3 rounded ${getDiffTypeColor(diffType)}`}>
+                                  <div className="text-sm mb-2">
+                                    <span className="font-semibold">{getDiffTypeLabel(diffType)}</span>
+                                  </div>
+                                  <div className="text-sm">{sourceSegment.text}</div>
+                                </div>
+                              ) : (
+                                <div className="text-sm text-gray-400 italic p-3">No matching text</div>
+                              )}
+                            </div>
+
+                            {/* Competitor Column */}
+                            <div className="p-4">
+                              <div className="text-sm font-semibold text-gray-600 mb-2">{competitorDrug.name}</div>
+                              {competitorSegment ? (
+                                <div className={`p-3 rounded ${getDiffTypeColor(diffType)}`}>
+                                  <div className="text-sm mb-2">
+                                    <span className="font-semibold">{getDiffTypeLabel(diffType)}</span>
+                                  </div>
+                                  <div className="text-sm">{competitorSegment.text}</div>
+                                </div>
+                              ) : (
+                                <div className="text-sm text-gray-400 italic p-3">No matching text</div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Explanation Preview */}
+                          {match.explanation && (
+                            <div className="px-4 py-2 bg-gray-50 border-t border-gray-200">
+                              <div className="flex items-center gap-2 text-xs text-gray-600">
+                                <Lightbulb className="h-3 w-3" />
+                                <span>{match.explanation}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
+              ))}
+            </div>
 
-                <div className="pt-4 border-t">
-                  <div className="text-sm text-muted-foreground">
-                    <p><strong>Total Comparisons:</strong> {semanticSummary.total_matches}</p>
+            {/* Modal Footer with Stats */}
+            {semanticSummary && (
+              <div className="p-6 border-t border-border bg-gray-50">
+                <div className="flex justify-around text-center">
+                  <div>
+                    <div className="text-2xl font-bold text-green-600">{semanticSummary.unique_to_source}</div>
+                    <div className="text-xs text-gray-600">Unique Advantages</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-blue-600">{semanticSummary.omissions}</div>
+                    <div className="text-xs text-gray-600">Gaps to Address</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-red-600">{semanticSummary.conflicts}</div>
+                    <div className="text-xs text-gray-600">Conflicts</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-yellow-600">{semanticSummary.partial_matches}</div>
+                    <div className="text-xs text-gray-600">Partial Matches</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-gray-600">{semanticSummary.high_similarity}</div>
+                    <div className="text-xs text-gray-600">High Similarity</div>
                   </div>
                 </div>
               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Explanation Modal */}
+      {explanationModal.show && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-6 border-b border-border">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Lightbulb className="h-5 w-5 text-yellow-500" />
+                AI Explanation
+              </h2>
+              <button
+                onClick={() => setExplanationModal({ show: false, sourceText: '', competitorText: '', sectionLoinc: '' })}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {isLoadingExplanation ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loading size="lg" text="Generating AI explanation..." />
+                </div>
+              ) : explanationModal.explanation ? (
+                <div className="space-y-6">
+                  {/* Compared Texts */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <h3 className="font-semibold text-sm text-gray-600 mb-2">{sourceDrug?.name}</h3>
+                      <div className="p-4 bg-blue-50 rounded-lg text-sm">
+                        {explanationModal.sourceText}
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-sm text-gray-600 mb-2">{competitorDrug?.name}</h3>
+                      <div className="p-4 bg-purple-50 rounded-lg text-sm">
+                        {explanationModal.competitorText}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI Analysis */}
+                  <div className="space-y-6">
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <h3 className="font-bold mb-3 text-gray-900 text-base">Explanation</h3>
+                      <div className="text-gray-700 leading-relaxed">
+                        {formatAIText(explanationModal.explanation.explanation)}
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <h3 className="font-bold mb-3 text-gray-900 text-base">Clinical Significance</h3>
+                      <div className="text-gray-700 leading-relaxed">
+                        {formatAIText(explanationModal.explanation.clinical_significance)}
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <h3 className="font-bold mb-3 text-gray-900 text-base">Marketing Implication</h3>
+                      <div className="text-gray-700 leading-relaxed">
+                        {formatAIText(explanationModal.explanation.marketing_implication)}
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <h3 className="font-bold mb-3 text-gray-900 text-base">Action Items</h3>
+                      <ul className="space-y-2">
+                        {explanationModal.explanation.action_items.map((item, idx) => (
+                          <li key={idx} className="text-gray-700 flex items-start gap-2">
+                            <span className="text-primary mt-1">•</span>
+                            <div className="flex-1">{formatAIText(item)}</div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center text-gray-500 py-12">
+                  Failed to load explanation
+                </div>
+              )}
             </div>
           </div>
-        </>
+        </div>
+      )}
+
+      {/* Executive Summary Modal */}
+      {showSummaryModal && executiveSummary && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-6 border-b border-border">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <BarChart3 className="h-6 w-6 text-primary" />
+                Executive Summary
+              </h2>
+              <button
+                onClick={() => setShowSummaryModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {isLoadingSummary ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loading size="lg" text="Generating executive summary..." />
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Overall Summary */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Overall Analysis</h3>
+                    <div className="text-gray-700 leading-relaxed">
+                      {formatAIText(executiveSummary.executive_summary)}
+                    </div>
+                  </div>
+
+                  {/* Category Breakdown */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Category Analysis</h3>
+                    <div className="space-y-4">
+                      {executiveSummary.category_summaries.map((category, idx) => (
+                        <div key={idx} className="border border-gray-200 rounded-lg p-4">
+                          <h4 className="font-semibold text-primary mb-3">{category.category}</h4>
+                          
+                          {category.advantages.length > 0 && (
+                            <div className="mb-4">
+                              <div className="text-sm font-bold text-green-700 mb-2 bg-green-50 px-3 py-1.5 rounded">Advantages</div>
+                              <div className="space-y-2 pl-2">
+                                {category.advantages.map((adv, i) => (
+                                  <div key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                                    <span className="text-green-600 font-bold mt-0.5">•</span>
+                                    <span className="flex-1">{formatAIText(adv)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {category.gaps.length > 0 && (
+                            <div className="mb-4">
+                              <div className="text-sm font-bold text-blue-700 mb-2 bg-blue-50 px-3 py-1.5 rounded">Gaps</div>
+                              <div className="space-y-2 pl-2">
+                                {category.gaps.map((gap, i) => (
+                                  <div key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                                    <span className="text-blue-600 font-bold mt-0.5">•</span>
+                                    <span className="flex-1">{formatAIText(gap)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {category.conflicts.length > 0 && (
+                            <div className="mb-4">
+                              <div className="text-sm font-bold text-red-700 mb-2 bg-red-50 px-3 py-1.5 rounded">Conflicts</div>
+                              <div className="space-y-2 pl-2">
+                                {category.conflicts.map((conflict, i) => (
+                                  <div key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                                    <span className="text-red-600 font-bold mt-0.5">•</span>
+                                    <span className="flex-1">{formatAIText(conflict)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Statistics */}
+                  <div className="bg-gray-50 rounded-lg p-6">
+                    <h3 className="text-lg font-semibold mb-4">Overall Statistics</h3>
+                    <div className="grid grid-cols-5 gap-4 text-center">
+                      <div>
+                        <div className="text-3xl font-bold text-green-600">{executiveSummary.overall_statistics.unique_to_source}</div>
+                        <div className="text-xs text-gray-600 mt-1">Unique Advantages</div>
+                      </div>
+                      <div>
+                        <div className="text-3xl font-bold text-blue-600">{executiveSummary.overall_statistics.omissions}</div>
+                        <div className="text-xs text-gray-600 mt-1">Gaps</div>
+                      </div>
+                      <div>
+                        <div className="text-3xl font-bold text-red-600">{executiveSummary.overall_statistics.conflicts}</div>
+                        <div className="text-xs text-gray-600 mt-1">Conflicts</div>
+                      </div>
+                      <div>
+                        <div className="text-3xl font-bold text-yellow-600">{executiveSummary.overall_statistics.partial_matches}</div>
+                        <div className="text-xs text-gray-600 mt-1">Partial Matches</div>
+                      </div>
+                      <div>
+                        <div className="text-3xl font-bold text-gray-600">{executiveSummary.overall_statistics.high_similarity}</div>
+                        <div className="text-xs text-gray-600 mt-1">High Similarity</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Chat Modal */}
+      {isChatOpen && (
+        <div className="fixed bottom-6 right-6 w-[450px] h-[600px] bg-white rounded-lg shadow-2xl flex flex-col z-50 border border-border">
+          <div className="flex items-center justify-between p-4 border-b border-border bg-primary text-primary-foreground rounded-t-lg">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5" />
+              <h3 className="font-semibold">AI Assistant</h3>
+            </div>
+            <button
+              onClick={() => setIsChatOpen(false)}
+              className="p-1 hover:bg-primary-foreground/20 rounded"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {chatMessages.length === 0 ? (
+              <div className="text-center text-muted-foreground py-8">
+                <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">Ask questions about the comparison</p>
+              </div>
+            ) : (
+              chatMessages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-lg px-4 py-3 ${
+                      msg.role === 'user'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-accent text-accent-foreground'
+                    }`}
+                  >
+                    {msg.role === 'user' ? (
+                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    ) : (
+                      <div 
+                        className="text-sm prose prose-sm max-w-none"
+                        style={{
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          lineHeight: '1.6'
+                        }}
+                        dangerouslySetInnerHTML={{ 
+                          __html: msg.content
+                            // Format markdown headers
+                            .replace(/^### (.*?)$/gm, '<h3 class="text-base font-semibold mt-3 mb-2">$1</h3>')
+                            .replace(/^## (.*?)$/gm, '<h2 class="text-lg font-bold mt-4 mb-2">$1</h2>')
+                            .replace(/^# (.*?)$/gm, '<h1 class="text-xl font-bold mt-4 mb-3">$1</h1>')
+                            // Format bold and italic
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                            // Format inline code
+                            .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1 rounded text-xs">$1</code>')
+                            // Format bullet points
+                            .replace(/^- (.*?)$/gm, '<div class="ml-4 mb-1">• $1</div>')
+                            // Format numbered lists
+                            .replace(/^(\d+)\. (.*?)$/gm, '<div class="ml-4 mb-1">$1. $2</div>')
+                            // Paragraphs and line breaks
+                            .replace(/\n\n/g, '</p><p class="mt-2">')
+                            .replace(/\n/g, '<br/>')
+                        }}
+                      />
+                    )}
+                    
+                    {msg.citations && msg.citations.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-border/50">
+                        <p className="text-xs font-semibold mb-2">Citations:</p>
+                        <div className="space-y-1">
+                          {msg.citations.map((citation, citIndex) => {
+                            // Determine which paper this citation belongs to
+                            const isSourceDrug = citation.drug_name === sourceDrug?.name;
+                            const sectionKey = isSourceDrug 
+                              ? `source-${citation.section_name}` 
+                              : `competitor-${citation.section_name}`;
+                            
+                            return (
+                              <button
+                                key={citIndex}
+                                onClick={() => {
+                                  const sectionElement = sectionRefs.current[sectionKey];
+                                  if (sectionElement) {
+                                    // Scroll the appropriate paper container
+                                    const scrollContainer = isSourceDrug ? sourceScrollRef.current : competitorScrollRef.current;
+                                    if (scrollContainer) {
+                                      const containerRect = scrollContainer.getBoundingClientRect();
+                                      const sectionRect = sectionElement.getBoundingClientRect();
+                                      const scrollTop = scrollContainer.scrollTop + (sectionRect.top - containerRect.top) - 20;
+                                      scrollContainer.scrollTo({ top: scrollTop, behavior: 'smooth' });
+                                    }
+                                  }
+                                }}
+                                className="text-xs text-left w-full hover:underline text-primary flex items-start gap-1"
+                              >
+                                <span className="flex-shrink-0">→</span>
+                                <span className="flex-1">
+                                  {citation.section_name} <span className="opacity-60">({citation.drug_name})</span>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+            
+            {isSendingMessage && (
+              <div className="flex justify-start">
+                <div className="bg-accent text-accent-foreground rounded-lg px-4 py-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      <div className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <div className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <div className="w-2 h-2 bg-current rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                    <span className="text-sm">Thinking...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="p-4 border-t border-border">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+                placeholder="Ask about the comparison..."
+                className="flex-1 px-3 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                disabled={isSendingMessage}
+              />
+              <Button
+                size="sm"
+                onClick={handleSendMessage}
+                disabled={isSendingMessage || !chatInput.trim()}
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
