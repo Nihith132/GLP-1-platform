@@ -1,11 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { drugService } from '@/services/drugService';
 import { analyticsService } from '@/services/analyticsService';
 import { chatService } from '@/services/chatService';
+import { useChatStore } from '@/store/chatStore';
+import { useWorkspaceStore } from '@/store/workspaceStore';
 import { Loading } from '../components/ui/Loading';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
+import { NotesModal } from '../components/NotesModal';
+import { HighlightPopup } from '../components/HighlightPopup';
+import { HighlightRenderer } from '../components/HighlightRenderer';
+import { SaveReportModal } from '../components/SaveReportModal';
+import { useTextSelection } from '../hooks/useTextSelection';
 import { 
   ArrowLeft, 
   MessageSquare, 
@@ -14,9 +21,12 @@ import {
   BarChart3,
   Calendar,
   Building2,
-  Printer
+  Printer,
+  Flag,
+  StickyNote,
+  Save
 } from 'lucide-react';
-import type { Drug } from '@/types';
+import type { Drug, ChatMessage } from '@/types';
 import './AnalysisWorkspace.css';
 
 interface DrugSection {
@@ -72,18 +82,26 @@ interface DrugAnalytics {
   }>;
 }
 
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  citations?: Array<{
-    section_name: string;
-    drug_name: string;
-  }>;
-}
-
 export function AnalysisWorkspace() {
   const { drugId } = useParams<{ drugId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const loadReportId = searchParams.get('loadReport');
+  
+  // Chat store
+  const { messages: chatMessages, addMessage, toggleFlag, getFlaggedMessages, restoreMessages, clearMessages } = useChatStore();
+  
+  // Workspace store for notes and highlights
+  const { 
+    setNotesModalOpen, 
+    notes, 
+    addHighlight, 
+    addNote, 
+    setDrug: setWorkspaceDrug,
+    syncFlaggedChats,
+    loadReport: loadWorkspaceReport,
+    clearWorkspace 
+  } = useWorkspaceStore();
   
   const [drug, setDrug] = useState<DrugDetail | null>(null);
   const [analytics, setAnalytics] = useState<DrugAnalytics | null>(null);
@@ -91,23 +109,34 @@ export function AnalysisWorkspace() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [isSaveReportModalOpen, setIsSaveReportModalOpen] = useState(false);
+  const [isRestoringReport, setIsRestoringReport] = useState(false);
   
   // Track scroll position for active section highlighting
   const sectionRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   
   // Chat state
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
-  
   const contentRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  
+  // Text selection and highlighting
+  const { selection, clearSelection } = useTextSelection(contentRef);
+  const [showColorPicker, setShowColorPicker] = useState(false);
 
   useEffect(() => {
     if (drugId) {
       loadDrugData(parseInt(drugId));
+      
+      // Clear workspace and chat when switching to a different drug
+      // (unless we're loading a report)
+      if (!loadReportId) {
+        clearWorkspace();
+        clearMessages();
+      }
     }
-  }, [drugId]);
+  }, [drugId, loadReportId, clearWorkspace, clearMessages]);
 
   useEffect(() => {
     // Auto-scroll chat to bottom
@@ -140,6 +169,46 @@ export function AnalysisWorkspace() {
     }
   };
 
+  const restoreReport = async (report: any) => {
+    try {
+      setIsRestoringReport(true);
+      
+      console.log('📝 Restoring report:', report);
+      
+      // Wait a moment for DOM to be fully ready
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Restore workspace state (highlights, notes, flagged chats, scroll position)
+      if (report.workspace_state) {
+        loadWorkspaceReport(report.workspace_state);
+        console.log('✅ Workspace state restored');
+        
+        // Restore flagged chat messages to chat store
+        if (report.workspace_state.flaggedChats && report.workspace_state.flaggedChats.length > 0) {
+          restoreMessages(report.workspace_state.flaggedChats);
+          console.log('💬 Chat messages restored:', report.workspace_state.flaggedChats.length);
+        }
+      }
+      
+      // Restore scroll position after a short delay
+      if (report.workspace_state?.scrollPosition && contentRef.current) {
+        setTimeout(() => {
+          if (contentRef.current) {
+            contentRef.current.scrollTop = report.workspace_state.scrollPosition;
+            console.log('📜 Scroll position restored');
+          }
+        }, 500);
+      }
+      
+      console.log('🎉 Report restoration complete!');
+    } catch (error) {
+      console.error('❌ Failed to restore report:', error);
+      alert('Failed to restore report. Some data may be missing.');
+    } finally {
+      setIsRestoringReport(false);
+    }
+  };
+
   useEffect(() => {
     // Intersection Observer for active section tracking
     const observer = new IntersectionObserver(
@@ -167,6 +236,89 @@ export function AnalysisWorkspace() {
     return () => observer.disconnect();
   }, [drug]);
 
+  // Update workspace store when drug changes
+  useEffect(() => {
+    if (drug) {
+      setWorkspaceDrug(drug.id, drug.name);
+    }
+  }, [drug, setWorkspaceDrug]);
+
+  // Sync flagged chats to workspace store whenever chat messages change
+  useEffect(() => {
+    const flaggedMessages = getFlaggedMessages();
+    syncFlaggedChats(flaggedMessages);
+  }, [chatMessages, getFlaggedMessages, syncFlaggedChats]);
+
+  // Handle report restoration from Reports page
+  useEffect(() => {
+    if (loadReportId && drug) {
+      const pendingReport = sessionStorage.getItem('pendingReportLoad');
+      if (pendingReport) {
+        try {
+          const report = JSON.parse(pendingReport);
+          restoreReport(report);
+          sessionStorage.removeItem('pendingReportLoad');
+        } catch (error) {
+          console.error('Failed to parse pending report:', error);
+        }
+      }
+    }
+  }, [loadReportId, drug]);
+
+  // Show color picker when text is selected
+  useEffect(() => {
+    if (selection) {
+      setShowColorPicker(true);
+    } else {
+      setShowColorPicker(false);
+    }
+  }, [selection]);
+
+  const handleColorSelect = (color: 'red' | 'blue') => {
+    if (!selection) return;
+
+    console.log('➕ Adding highlight:', {
+      sectionId: selection.sectionId,
+      color,
+      text: selection.text.substring(0, 50) + '...',
+      startOffset: selection.startOffset,
+      endOffset: selection.endOffset,
+    });
+
+    // Add highlight with position data
+    const highlightId = addHighlight({
+      sectionId: selection.sectionId,
+      startOffset: selection.startOffset,
+      endOffset: selection.endOffset,
+      text: selection.text,
+      color,
+      rect: selection.rect ? {
+        top: selection.rect.top + window.scrollY,
+        left: selection.rect.left,
+        width: selection.rect.width,
+        height: selection.rect.height,
+      } : undefined,
+    });
+
+    console.log('✅ Highlight added with ID:', highlightId);
+
+    // Automatically create a cited note for this highlight
+    addNote({
+      type: 'cited',
+      content: '', // Empty content, user will fill it in
+      highlightId,
+    });
+
+    // Clear selection and hide popup
+    clearSelection();
+    setShowColorPicker(false);
+  };
+
+  const handleCancelHighlight = () => {
+    clearSelection();
+    setShowColorPicker(false);
+  };
+
   const scrollToSection = (sectionTitle: string) => {
     setActiveSection(sectionTitle);
     const ref = sectionRefs.current[sectionTitle];
@@ -179,11 +331,13 @@ export function AnalysisWorkspace() {
     if (!chatInput.trim() || !drug) return;
 
     const userMessage: ChatMessage = {
+      id: `${Date.now()}_user`,
       role: 'user',
-      content: chatInput
+      content: chatInput,
+      timestamp: new Date(),
     };
 
-    setChatMessages(prev => [...prev, userMessage]);
+    addMessage(userMessage);
     setChatInput('');
     setIsSendingMessage(true);
 
@@ -194,19 +348,28 @@ export function AnalysisWorkspace() {
       });
 
       const assistantMessage: ChatMessage = {
+        id: `${Date.now()}_assistant`,
         role: 'assistant',
         content: response.answer,
-        citations: response.citations
+        timestamp: new Date(),
+        citations: response.citations?.map(c => ({
+          ...c,
+          relevance_score: 0 // Default value since API doesn't return it
+        })),
+        isFlagged: false,
       };
 
-      setChatMessages(prev => [...prev, assistantMessage]);
+      addMessage(assistantMessage);
     } catch (err) {
       console.error('Error sending message:', err);
       const errorMessage: ChatMessage = {
+        id: `${Date.now()}_error`,
         role: 'assistant',
-        content: 'Sorry, I encountered an error processing your question. Please try again.'
+        content: 'Sorry, I encountered an error processing your question. Please try again.',
+        timestamp: new Date(),
+        isFlagged: false,
       };
-      setChatMessages(prev => [...prev, errorMessage]);
+      addMessage(errorMessage);
     } finally {
       setIsSendingMessage(false);
     }
@@ -277,11 +440,34 @@ export function AnalysisWorkspace() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => setIsSaveReportModalOpen(true)}
+              className="no-print"
+            >
+              <Save className="w-4 h-4 mr-2" />
+              Save as Report
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => window.print()}
               className="no-print"
             >
               <Printer className="w-4 h-4 mr-2" />
               Print Label
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setNotesModalOpen(true)}
+              className="no-print relative"
+            >
+              <StickyNote className="w-4 h-4 mr-2" />
+              Notes
+              {notes.length > 0 && (
+                <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  {notes.length}
+                </span>
+              )}
             </Button>
             <Button
               variant={showAnalytics ? 'default' : 'outline'}
@@ -353,6 +539,7 @@ export function AnalysisWorkspace() {
                 key={section.id}
                 ref={(el) => (sectionRefs.current[section.title] = el)}
                 data-section-title={section.title}
+                data-section-id={section.id}
                 className="mb-8 last:mb-0"
               >
                 {/* Section Header - FDA Style */}
@@ -365,11 +552,11 @@ export function AnalysisWorkspace() {
                   </h2>
                 </div>
 
-                {/* Section Content - Document Style */}
-                <div>
-                  <div 
-                    className="drug-label-content"
-                    dangerouslySetInnerHTML={{ __html: section.content_html || section.content }}
+                {/* Section Content - Document Style with Highlighting */}
+                <div className="drug-label-content">
+                  <HighlightRenderer 
+                    sectionId={section.id}
+                    content={section.content_html || section.content}
                   />
                 </div>
               </div>
@@ -414,20 +601,33 @@ export function AnalysisWorkspace() {
                 </div>
               )}
               
-              {chatMessages.map((message, index) => (
+              {chatMessages.map((message) => (
                 <div
-                  key={index}
+                  key={message.id}
                   className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-[80%] rounded-lg px-4 py-3 ${
+                    className={`max-w-[80%] rounded-lg px-4 py-3 relative ${
                       message.role === 'user'
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-accent text-accent-foreground'
                     }`}
                   >
+                    {/* Flag button for assistant messages */}
+                    {message.role === 'assistant' && (
+                      <button
+                        onClick={() => toggleFlag(message.id)}
+                        className={`absolute top-2 right-2 p-1 rounded hover:bg-background/10 transition-colors ${
+                          message.isFlagged ? 'text-red-500' : 'text-muted-foreground'
+                        }`}
+                        title={message.isFlagged ? 'Unflag' : 'Flag for report'}
+                      >
+                        <Flag className={`w-4 h-4 ${message.isFlagged ? 'fill-current' : ''}`} />
+                      </button>
+                    )}
+                    
                     <div 
-                      className="text-sm prose prose-sm max-w-none"
+                      className="text-sm prose prose-sm max-w-none pr-8"
                       style={{
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
@@ -589,6 +789,42 @@ export function AnalysisWorkspace() {
         >
           <MessageSquare className="w-6 h-6" />
         </button>
+      )}
+
+      {/* Notes Modal */}
+      <NotesModal />
+
+      {/* Save Report Modal */}
+      <SaveReportModal 
+        isOpen={isSaveReportModalOpen}
+        onClose={() => setIsSaveReportModalOpen(false)}
+      />
+
+      {/* Highlight Color Picker Popup */}
+      {showColorPicker && selection && selection.rect && (
+        <HighlightPopup
+          position={{
+            top: selection.rect.top + window.scrollY,
+            left: selection.rect.left + selection.rect.width / 2,
+          }}
+          onSelectColor={handleColorSelect}
+          onCancel={handleCancelHighlight}
+        />
+      )}
+
+      {/* Report Restoration Loading Overlay */}
+      {isRestoringReport && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 shadow-2xl max-w-md">
+            <div className="flex flex-col items-center">
+              <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">Restoring Report</h3>
+              <p className="text-sm text-gray-500 text-center">
+                Loading highlights, notes, and flagged chats...
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
