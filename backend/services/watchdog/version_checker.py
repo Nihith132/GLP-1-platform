@@ -210,7 +210,7 @@ class VersionChecker:
                 WHERE id = :drug_id
             """)
             await session.execute(update_drug, {
-                "new_version": new_version,
+                "new_version": str(new_version),  # Ensure string type
                 "now": datetime.utcnow(),
                 "drug_id": drug_id
             })
@@ -228,8 +228,8 @@ class VersionChecker:
             """)
             await session.execute(insert_history, {
                 "drug_id": drug_id,
-                "old_version": old_version,
-                "new_version": new_version,
+                "old_version": str(old_version) if old_version else None,
+                "new_version": str(new_version),
                 "s3_key": s3_key,
                 "publish_date": publish_date,
                 "detected_at": datetime.utcnow()
