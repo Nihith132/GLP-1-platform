@@ -100,9 +100,11 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   // Save/Load/Clear
   saveAsReport: async (title, description, tags) => {
     const state = get();
-    const workspaceState: WorkspaceState = {
-      drugId: state.drugId,
-      drugName: state.drugName,
+    
+    // Convert to snake_case for backend API (backend expects snake_case)
+    const workspaceState: any = {
+      drug_id: state.drugId,
+      drug_name: state.drugName,
       highlights: state.highlights,
       notes: state.notes,
       flaggedChats: state.flaggedChats,
@@ -118,14 +120,15 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
     });
   },
 
-  loadReport: (workspaceState) => {
+  loadReport: (workspaceState: any) => {
+    // Handle both snake_case (from backend) and camelCase (internal)
     set({
-      drugId: workspaceState.drugId,
-      drugName: workspaceState.drugName,
-      highlights: workspaceState.highlights,
-      notes: workspaceState.notes,
-      flaggedChats: workspaceState.flaggedChats,
-      scrollPosition: workspaceState.scrollPosition,
+      drugId: workspaceState.drug_id || workspaceState.drugId,
+      drugName: workspaceState.drug_name || workspaceState.drugName,
+      highlights: workspaceState.highlights || [],
+      notes: workspaceState.notes || [],
+      flaggedChats: workspaceState.flaggedChats || [],
+      scrollPosition: workspaceState.scrollPosition || 0,
     });
   },
 

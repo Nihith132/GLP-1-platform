@@ -39,7 +39,7 @@ export function Reports() {
       sessionStorage.setItem('pendingReportLoad', JSON.stringify(report));
       
       // Navigate to AnalysisWorkspace with drug ID from workspace_state
-      const drugId = (report as any).workspace_state?.drugId;
+      const drugId = (report as any).workspace_state?.drug_id || (report as any).workspace_state?.drugId;
       if (drugId) {
         navigate(`/analysis/${drugId}?loadReport=${reportId}`);
       } else {
@@ -85,48 +85,54 @@ export function Reports() {
         <Card>
           <CardContent className="py-12 text-center">
             <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground">No reports yet</p>
+            <p className="text-muted-foreground">
+              No reports yet
+            </p>
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {reports.map((report) => (
-            <Card key={report.id}>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <CardTitle className="text-lg">{report.title}</CardTitle>
-                    <div className="flex items-center gap-2 mt-2">
-                      <Badge variant="secondary">{report.report_type}</Badge>
-                      <span className="text-xs text-muted-foreground flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        {new Date(report.created_at).toLocaleDateString()}
-                      </span>
+          {reports.map((report) => {
+            const drugName = (report as any).workspace_state?.drug_name || 'Unknown Drug';
+            return (
+              <Card key={report.id}>
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <CardTitle className="text-lg">{report.title}</CardTitle>
+                      <p className="text-sm text-muted-foreground mt-1">{drugName}</p>
+                      <div className="flex items-center gap-2 mt-2">
+                        <Badge variant="secondary">{report.report_type}</Badge>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {new Date(report.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-2">
-                  <Button 
-                    variant="outline" 
-                    className="flex-1"
-                    onClick={() => handleLoadReport(report.id)}
-                  >
-                    <FolderOpen className="h-4 w-4 mr-2" />
-                    Load Report
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="icon"
-                    onClick={() => handleDelete(report.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-2">
+                    <Button 
+                      variant="outline" 
+                      className="flex-1"
+                      onClick={() => handleLoadReport(report.id)}
+                    >
+                      <FolderOpen className="h-4 w-4 mr-2" />
+                      Load Report
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="icon"
+                      onClick={() => handleDelete(report.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

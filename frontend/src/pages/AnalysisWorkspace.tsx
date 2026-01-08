@@ -89,7 +89,7 @@ export function AnalysisWorkspace() {
   const loadReportId = searchParams.get('loadReport');
   
   // Chat store
-  const { messages: chatMessages, addMessage, toggleFlag, getFlaggedMessages, restoreMessages } = useChatStore();
+  const { messages: chatMessages, addMessage, toggleFlag, getFlaggedMessages, restoreMessages, clearMessages } = useChatStore();
   
   // Workspace store for notes and highlights
   const { 
@@ -99,7 +99,8 @@ export function AnalysisWorkspace() {
     addNote, 
     setDrug: setWorkspaceDrug,
     syncFlaggedChats,
-    loadReport: loadWorkspaceReport 
+    loadReport: loadWorkspaceReport,
+    clearWorkspace 
   } = useWorkspaceStore();
   
   const [drug, setDrug] = useState<DrugDetail | null>(null);
@@ -127,8 +128,15 @@ export function AnalysisWorkspace() {
   useEffect(() => {
     if (drugId) {
       loadDrugData(parseInt(drugId));
+      
+      // Clear workspace and chat when switching to a different drug
+      // (unless we're loading a report)
+      if (!loadReportId) {
+        clearWorkspace();
+        clearMessages();
+      }
     }
-  }, [drugId]);
+  }, [drugId, loadReportId, clearWorkspace, clearMessages]);
 
   useEffect(() => {
     // Auto-scroll chat to bottom

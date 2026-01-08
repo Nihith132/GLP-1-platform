@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Save, AlertCircle, CheckCircle } from 'lucide-react';
 import { useWorkspaceStore } from '../store/workspaceStore';
+import { reportService } from '../services/reportService';
 
 interface SaveReportModalProps {
   isOpen: boolean;
@@ -16,8 +17,26 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
+  const [existingReportTitles, setExistingReportTitles] = useState<string[]>([]);
 
   const hasContent = highlights.length > 0 || notes.length > 0 || flaggedChats.length > 0;
+
+  // Load existing report titles when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      loadExistingTitles();
+    }
+  }, [isOpen]);
+
+  const loadExistingTitles = async () => {
+    try {
+      const reports = await reportService.getAllReports();
+      const titles = reports.map(r => r.title.toLowerCase().trim());
+      setExistingReportTitles(titles);
+    } catch (error) {
+      console.error('Failed to load existing reports:', error);
+    }
+  };
 
   const validateInputs = (): string | null => {
     if (!title.trim()) {
@@ -26,6 +45,13 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
     if (title.length > 200) {
       return 'Title is too long (max 200 characters)';
     }
+    
+    // Check for duplicate title
+    const normalizedTitle = title.toLowerCase().trim();
+    if (existingReportTitles.includes(normalizedTitle)) {
+      return 'A report with this title already exists. Please use a different name.';
+    }
+    
     if (!hasContent) {
       return 'Cannot save empty report. Add highlights, notes, or flag chats first.';
     }
@@ -157,15 +183,34 @@ export const SaveReportModal: React.FC<SaveReportModalProps> = ({ isOpen, onClos
               id="title"
               type="text"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                // Clear error when user starts typing
+                if (saveStatus === 'error') {
+                  setSaveStatus('idle');
+                  setErrorMessage('');
+                }
+              }}
               placeholder="e.g., Ozempic Safety Analysis - January 2026"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                title.trim() && existingReportTitles.includes(title.toLowerCase().trim())
+                  ? 'border-red-300 bg-red-50'
+                  : 'border-gray-300'
+              }`}
               disabled={isSaving}
               maxLength={200}
             />
-            <p className="text-xs text-gray-500 mt-1">
-              {title.length}/200 characters
-            </p>
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-xs text-gray-500">
+                {title.length}/200 characters
+              </p>
+              {title.trim() && existingReportTitles.includes(title.toLowerCase().trim()) && (
+                <p className="text-xs text-red-600 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  Title already exists
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Description Input (Optional) */}
